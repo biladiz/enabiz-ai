@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "enabiz-ai"
+version = "0.1.0"
+description = "AI Automation System for e-Nabız"
+requires-python = ">=3.11"
+dependencies = [
+    "browser-use>=0.2",
+    "playwright",
+    "langchain-ollama",
+    "docling",
+    "python-telegram-bot>=21.0",
+    "cryptography",
+    "aiosqlite",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "typer[all]>=0.9",
+    "rich",
+    "httpx",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[project.scripts]
+enabiz-ai = "enabiz_ai.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/enabiz_ai"]
