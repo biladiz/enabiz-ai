@@ -14,6 +14,7 @@ from typing import Optional
 from browser_use import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 from playwright.async_api import async_playwright
+from pydantic import SecretStr
 
 from enabiz_ai.browser.edevlet_login import EDevletLogin
 from enabiz_ai.browser.enabiz_navigator import ENabizNavigator
@@ -59,7 +60,7 @@ class Orchestrator:
             master_passphrase: Passphrase to decrypt stored credentials.
         """
         self.config = config
-        self._passphrase = master_passphrase
+        self._passphrase = SecretStr(master_passphrase) if isinstance(master_passphrase, str) else master_passphrase
 
         # Initialize components
         self.credential_manager = CredentialManager(config.data_dir)
@@ -136,7 +137,8 @@ class Orchestrator:
         Returns:
             True if login successful.
         """
-        credentials = self.credential_manager.load(self._passphrase)
+        passphrase_val = self._passphrase.get_secret_value() if isinstance(self._passphrase, SecretStr) else self._passphrase
+        credentials = self.credential_manager.load(passphrase_val)
 
         login_handler = EDevletLogin(
             session_manager=self.session_manager,

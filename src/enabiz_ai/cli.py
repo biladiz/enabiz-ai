@@ -1,24 +1,29 @@
-"""Command-line interface for e-Nabız AI automation.
+"""Command-line interface for e-Nabız AI multi-profile automation.
 
 Usage:
-    enabiz-ai setup           # First-time credential + bot configuration
-    enabiz-ai sync labs       # Download & parse lab results
-    enabiz-ai sync rx         # Download prescriptions
-    enabiz-ai sync all        # Full sync
-    enabiz-ai parse FILE      # Parse a local PDF
-    enabiz-ai query labs      # Query stored lab results
-    enabiz-ai export csv      # Export data to CSV
-    enabiz-ai status          # Show system status
+    enabiz-ai profile list             # List family member profiles
+    enabiz-ai profile add anne         # Add a family member with e-Devlet credentials
+    enabiz-ai profile login anne       # Launch visible browser to authenticate a member
+    enabiz-ai weekly --profile all     # Run weekly sync & report for all family members
+    enabiz-ai schedule add anne -d Sunday -t 20:30 # Register weekly task in Task Scheduler
+    enabiz-ai status                   # Show system & all profiles status
 """
 
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import logging
+import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import typer
 from rich.console import Console
@@ -26,14 +31,30 @@ from rich.panel import Panel
 from rich.table import Table
 
 from enabiz_ai import __version__
+from enabiz_ai.analysis.rag_engine import RAGEngine
+from enabiz_ai.browser.authenticator import authenticate_profile
 from enabiz_ai.config import AppConfig
+from enabiz_ai.extraction.harvester import ENabizHarvester
+from enabiz_ai.extraction.llm_extractor import LLMExtractor
+from enabiz_ai.profiles.manager import ProfileManager, InvalidProfileIdError
+from enabiz_ai.profiles.models import ProfileInfo
+from enabiz_ai.services.pipeline import SyncService
+from enabiz_ai.services.scheduler import SchedulerService
+from enabiz_ai.storage.database import HealthDatabase
 
-console = Console()
+console = Console(force_terminal=True, legacy_windows=False)
 app = typer.Typer(
     name="enabiz-ai",
-    help="🏥 e-Nabız AI Automation System — Download and analyze your health data locally.",
+    help="🏥 e-Nabız AI Automation System — Multi-Person Health Records & AI Analysis.",
     no_args_is_help=True,
 )
+
+profile_app = typer.Typer(name="profile", help="👥 Manage family profiles (Mom, Dad, Self, etc.)")
+schedule_app = typer.Typer(name="schedule", help="⏰ Manage weekly Windows Task Scheduler jobs per person")
+
+app.add_typer(profile_app)
+app.add_typer(schedule_app)
+
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -46,321 +67,345 @@ def _setup_logging(level: str = "INFO") -> None:
     )
 
 
-def _get_passphrase() -> str:
+def _get_passphrase(prompt_text: str = "🔑 Master passphrase: ") -> str:
     """Prompt for master passphrase."""
-    import getpass
-    return getpass.getpass("🔑 Master passphrase: ")
+    return getpass.getpass(prompt_text)
 
 
 def _run_async(coro):
     """Run an async function in the event loop."""
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     return asyncio.run(coro)
 
 
-# ── Commands ───────────────────────────────────────────────────────
+# ── Profile Commands ───────────────────────────────────────────────
+
+
+@profile_app.command("list")
+def profile_list():
+    """📋 List all registered family member profiles."""
+    config = AppConfig()
+    pm = ProfileManager(config.data_dir)
+    profiles = pm.list_profiles()
+
+    if not profiles:
+        console.print("[dim]Kayıtlı profil bulunamadı.[/dim]")
+        return
+
+    table = Table(title="👥 Kayıtlı Aile Profilleri")
+    table.add_column("Profil ID", style="cyan")
+    table.add_column("Kişi Adı", style="bold white")
+    table.add_column("Yakınlık", style="yellow")
+    table.add_column("Kimlik", style="green")
+    table.add_column("Oturum (2FA)", style="magenta")
+    table.add_column("Tahlil / Ziyaret", style="blue")
+
+    sync_svc = SyncService(config)
+    stats_map = _run_async(sync_svc.get_all_profiles_stats(profiles))
+
+    for p in profiles:
+        cred_mgr = pm.get_credential_manager(p.id)
+        has_cred = "✅ Şifrelendi" if cred_mgr.exists() else "❌ Yok"
+        session_file = pm.get_session_path(p.id)
+        has_session = "✅ Aktif" if session_file.exists() else "⚠️ Giriş Gerekli"
+
+        s = stats_map.get(p.id, {})
+        if s:
+            stats_str = f"{s.get('lab_reports', 0)} tahlil, {s.get('visits', 0)} ziyaret"
+        else:
+            stats_str = "-"
+
+        table.add_row(p.id, p.display_name, p.relation, has_cred, has_session, stats_str)
+
+    console.print(table)
+
+
+@profile_app.command("add")
+def profile_add(
+    profile_id: str = typer.Argument(..., help="Profil ID (örn: 'anne', 'baba')"),
+    display_name: str = typer.Option(None, "--name", "-n", help="Görünen isim (örn: 'Annem (Ayşe)')"),
+    relation: str = typer.Option(None, "--relation", "-r", help="Yakınlık (örn: 'Anne', 'Baba')"),
+):
+    """➕ Add a new family member profile with their e-Devlet credentials."""
+    config = AppConfig()
+    pm = ProfileManager(config.data_dir)
+
+    console.print(Panel(
+        f"[bold cyan]Yeni Profil Ekleme: {profile_id}[/bold cyan]",
+        title="👥 Profil Sihirbazı",
+        border_style="cyan",
+    ))
+
+    if not display_name:
+        display_name = typer.prompt("  Kişi Görünen Adı (örn: Annem)", default=profile_id.capitalize())
+    if not relation:
+        relation = typer.prompt("  Yakınlık Derecesi (örn: Anne, Baba, Eş)", default="Aile")
+
+    tc_no = typer.prompt("  TC Kimlik No (11 hane)")
+    edevlet_pass = getpass.getpass("  e-Devlet Şifresi: ")
+
+    passphrase = _get_passphrase("  Master Şifre (bu bilgileri şifrelemek için): ")
+
+    # Validate and normalize profile ID
+    try:
+        validated_id = ProfileManager.validate_profile_id(profile_id)
+    except InvalidProfileIdError as e:
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(1)
+
+    # Save profile metadata
+    prof = ProfileInfo(
+        id=validated_id,
+        display_name=display_name,
+        relation=relation,
+        created_at=datetime.now(),
+    )
+    pm.save_profile(prof)
+
+    # Save encrypted credentials
+    cred_mgr = pm.get_credential_manager(prof.id)
+    cred_mgr.save(tc_no, edevlet_pass, passphrase)
+
+    console.print(Panel(
+        f"[green]✓ {display_name} ({relation}) profili başarıyla oluşturuldu ve kimlik bilgileri şifrelendi![/green]\n\n"
+        f"Şimdi ilk oturum açma ve 2FA onayını gerçekleştirmek için:\n"
+        f"  [bold]enabiz-ai profile login {prof.id}[/bold]",
+        title="🎉 Başarılı",
+        border_style="green",
+    ))
+
+
+@profile_app.command("login")
+def profile_login(
+    profile_id: str = typer.Argument("default", help="Oturum açılacak profil (örn: 'anne', 'baba')"),
+):
+    """🔑 Launch browser login & 2FA approval for a family member."""
+    config = AppConfig()
+    _setup_logging(config.log_level)
+    pm = ProfileManager(config.data_dir)
+    profile = pm.get_profile(profile_id)
+    if not profile:
+        console.print(f"[red]✗ Profil bulunamadı: {profile_id}[/red]")
+        raise typer.Exit(1)
+
+    passphrase = _get_passphrase()
+
+    console.print(f"[cyan]🚀 {profile.display_name} için e-Devlet giriş penceresi açılıyor...[/cyan]")
+    try:
+        ok = _run_async(authenticate_profile(
+            profile_id=profile_id,
+            config=config,
+            master_passphrase=passphrase,
+            headless=False,
+        ))
+        if ok:
+            console.print(f"[bold green]✓ {profile.display_name} için e-Nabız oturumu başarıyla kaydedildi![/bold green]")
+        else:
+            console.print(f"[red]✗ Giriş tamamlanamadı.[/red]")
+    except Exception as e:
+        console.print(f"[red]✗ Hata: {e}[/red]")
+
+
+@profile_app.command("delete")
+def profile_delete(
+    profile_id: str = typer.Argument(..., help="Silinecek profil ID"),
+    delete_data: bool = typer.Option(False, "--delete-data", help="Tüm veritabanı ve oturum dosyalarını da sil"),
+):
+    """🗑️ Delete a family member profile."""
+    config = AppConfig()
+    pm = ProfileManager(config.data_dir)
+    try:
+        if pm.delete_profile(profile_id, delete_data=delete_data):
+            console.print(f"[green]✓ {profile_id} profili silindi.[/green]")
+        else:
+            console.print(f"[red]✗ Profil bulunamadı: {profile_id}[/red]")
+    except Exception as e:
+        console.print(f"[red]✗ {e}[/red]")
+
+
+# ── Schedule Commands ──────────────────────────────────────────────
+
+
+_VALID_DAYS = {"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+_TIME_PATTERN = re.compile(r'^\d{1,2}:\d{2}$')
+
+
+@schedule_app.command("add")
+def schedule_add(
+    profile: str = typer.Option("all", "--profile", "-p", help="Hangi profil için ('all', 'default', 'anne', vb.)"),
+    day: str = typer.Option("Sunday", "--day", "-d", help="Haftanın günü (örn: Sunday, Monday)"),
+    time_str: str = typer.Option("20:00", "--time", "-t", help="Çalışma saati (örn: 20:00, 20:30)"),
+):
+    """⏰ Register weekly Windows Task Scheduler job for a person or all members."""
+    try:
+        success, task_name, msg = SchedulerService.add_schedule(profile, day, time_str)
+        if success:
+            console.print(Panel(
+                f"[bold green]✓ Görev Zamanlayıcıya Başarıyla Kaydedildi![/bold green]\n\n"
+                f"Görev Adı: [cyan]{task_name}[/cyan]\n"
+                f"Profil: [yellow]{profile}[/yellow]\n"
+                f"Zaman: Her [white]{day} saat {time_str}[/white] (Bilgisayar kapalıysa açıldığında çalışır)",
+                title="⏰ Haftalık Zamanlama",
+                border_style="green",
+            ))
+        else:
+            console.print(f"[red]✗ Görev oluşturulamadı: {msg}[/red]")
+            raise typer.Exit(1)
+    except (ValueError, InvalidProfileIdError) as e:
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(1)
+
+
+@schedule_app.command("list")
+def schedule_list():
+    """📋 List active e-Nabız scheduled tasks in Windows."""
+    tasks = SchedulerService.list_schedules()
+    if not tasks:
+        console.print("[dim]Aktif e-Nabız AI zamanlanmış görevi bulunamadı.[/dim]")
+        return
+
+    table = Table(title="⏰ Windows Görev Zamanlayıcı (e-Nabız AI)")
+    table.add_column("Görev Adı", style="cyan")
+    table.add_column("Durum", style="green")
+
+    for t in tasks:
+        table.add_row(t.get("TaskName", ""), t.get("StateText", ""))
+    console.print(table)
+
+
+@schedule_app.command("remove")
+def schedule_remove(
+    profile: str = typer.Argument(..., help="Kaldırılacak görev profili veya adı (örn: 'anne', 'all', 'ENabizAI_WeeklySync')"),
+):
+    """🗑️ Remove a scheduled task from Windows Task Scheduler."""
+    success, res = SchedulerService.remove_schedule(profile)
+    if success:
+        console.print(f"[green]✓ Görev kaldırıldı: {res}[/green]")
+    else:
+        console.print(f"[red]✗ Hata: {res}[/red]")
+
+
+# ── Core Operations (Multi-Profile Aware) ──────────────────────────
 
 
 @app.command()
-def setup():
-    """🔧 First-time setup — configure credentials and Telegram bot."""
+def weekly(
+    profile: str = typer.Option("all", "--profile", "-p", help="Hangi profil için ('all', 'default', 'anne', vb.)"),
+):
+    """📅 Run weekly sync and deliver clinical report to Telegram for family member(s)."""
     config = AppConfig()
     _setup_logging(config.log_level)
+    pm = ProfileManager(config.data_dir)
+    sync_svc = SyncService(config)
 
-    console.print(Panel(
-        "[bold green]e-Nabız AI Kurulum Sihirbazı[/bold green]\n"
-        f"Versiyon: {__version__}",
-        title="🏥 Setup",
-        border_style="green",
-    ))
+    async def _runner():
+        targets = pm.list_profiles() if profile.lower() == "all" else [pm.get_profile(profile)]
+        for p in targets:
+            if not p:
+                console.print(f"[red]✗ Profil bulunamadı: {profile}[/red]")
+                raise typer.Exit(1)
 
-    # Step 1: Master passphrase
-    console.print("\n[bold]1. Master Şifre[/bold]")
-    console.print("Kimlik bilgilerinizi şifrelemek için bir master şifre belirleyin.")
-    import getpass
-    passphrase = getpass.getpass("  Yeni master şifre: ")
-    passphrase_confirm = getpass.getpass("  Şifreyi tekrar girin: ")
-    if passphrase != passphrase_confirm:
-        console.print("[red]✗ Şifreler eşleşmiyor![/red]")
-        raise typer.Exit(1)
+            console.print(Panel(
+                f"[bold cyan]Kişi: {p.display_name} ({p.relation})[/bold cyan]\n"
+                f"Profil ID: {p.id}",
+                title="👤 Haftalık İşlem Yapılıyor",
+                border_style="cyan",
+            ))
 
-    # Step 2: e-Devlet credentials
-    console.print("\n[bold]2. e-Devlet Kimlik Bilgileri[/bold]")
-    tc_no = typer.prompt("  TC Kimlik No (11 hane)")
-    password = getpass.getpass("  e-Devlet Şifre: ")
+            res, report = await sync_svc.run_weekly_pipeline(p)
+            console.print(f"[green]✓ Veriler güncellendi: {res}[/green]")
+            console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
+            console.print(f"[green]✓ [{p.display_name}] haftalık değerlendirmesi tamamlandı![/green]\n")
 
-    # Save credentials
-    from enabiz_ai.credentials.manager import CredentialManager
-    cred_manager = CredentialManager(config.data_dir)
-    try:
-        cred_manager.save(tc_no, password, passphrase)
-        console.print("[green]  ✓ Kimlik bilgileri şifrelenerek kaydedildi.[/green]")
-    except Exception as e:
-        console.print(f"[red]  ✗ Kayıt başarısız: {e}[/red]")
-        raise typer.Exit(1)
+    _run_async(_runner())
 
-    # Step 3: Telegram bot (optional)
-    console.print("\n[bold]3. Telegram Bot (İsteğe bağlı)[/bold]")
-    console.print("  2FA kodlarını telefonda almak için bir Telegram botu gerekir.")
-    console.print("  @BotFather'dan bot oluşturup token'ı buraya girin.")
-    console.print("  (Atlamak için boş bırakın)")
 
-    bot_token = typer.prompt("  Bot Token", default="", show_default=False)
-    if bot_token:
-        console.print(
-            "  [dim]Bot'unuza /start mesajı gönderin, "
-            "Chat ID'nizi öğrenin ve aşağıya girin.[/dim]"
-        )
-        chat_id = typer.prompt("  Chat ID")
+@app.command()
+def analyze(
+    profile: str = typer.Option("default", "--profile", "-p", help="Profil ID ('default', 'anne', 'all')"),
+    notify: bool = typer.Option(True, "--notify/--no-notify", help="Telegram'a gönder"),
+):
+    """🧠 Generate RAG clinical evaluation using DGX Spark LLM."""
+    config = AppConfig()
+    _setup_logging(config.log_level)
+    pm = ProfileManager(config.data_dir)
+    sync_svc = SyncService(config)
 
-        # Save to .env file
-        env_path = Path(".env")
-        env_lines = []
-        if env_path.exists():
-            env_lines = env_path.read_text().splitlines()
+    async def _analyze():
+        targets = pm.list_profiles() if profile.lower() == "all" else [pm.get_profile(profile)]
+        for p in targets:
+            if not p:
+                continue
+            db_path = pm.get_db_path(p.id)
+            if not db_path.exists():
+                console.print(f"[yellow]⚠️ {p.display_name} için veritabanı bulunamadı.[/yellow]")
+                continue
 
-        # Update or add entries
-        env_dict = {}
-        for line in env_lines:
-            if "=" in line and not line.strip().startswith("#"):
-                key, _, val = line.partition("=")
-                env_dict[key.strip()] = val.strip()
+            console.print(f"[bold cyan]🧠 [{p.display_name}] RAG Klinik Analiz Başlatılıyor...[/bold cyan]")
+            report = await sync_svc.run_clinical_analysis(p, notify=notify)
+            console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
 
-        env_dict["TELEGRAM_BOT_TOKEN"] = bot_token
-        env_dict["TELEGRAM_CHAT_ID"] = chat_id
-
-        with open(env_path, "w", encoding="utf-8") as f:
-            for key, val in env_dict.items():
-                f.write(f"{key}={val}\n")
-
-        console.print("[green]  ✓ Telegram bot yapılandırıldı.[/green]")
-    else:
-        console.print("  [dim]Telegram atlandı — konsol 2FA kullanılacak.[/dim]")
-
-    # Summary
-    console.print(Panel(
-        "[green]✓ Kurulum tamamlandı![/green]\n\n"
-        "Şimdi şunları yapabilirsiniz:\n"
-        "  [bold]enabiz-ai sync labs[/bold]    — Tahlil sonuçlarını indir\n"
-        "  [bold]enabiz-ai sync all[/bold]     — Tüm verileri senkronize et\n"
-        "  [bold]enabiz-ai status[/bold]       — Sistem durumunu kontrol et",
-        title="🎉 Kurulum Başarılı",
-        border_style="green",
-    ))
+    _run_async(_analyze())
 
 
 @app.command()
 def sync(
-    target: str = typer.Argument(
-        "all",
-        help="What to sync: labs, rx (prescriptions), all",
-    ),
+    target: str = typer.Argument("all", help="labs, rx, all"),
+    profile: str = typer.Option("default", "--profile", "-p", help="Profil ID ('default', 'anne', vb.)"),
 ):
-    """🔄 Sync health data from e-Nabız."""
+    """🔄 Sync health data from e-Nabız for a profile."""
     config = AppConfig()
     _setup_logging(config.log_level)
-    passphrase = _get_passphrase()
+    pm = ProfileManager(config.data_dir)
+    p = pm.get_profile(profile)
+    if not p:
+        console.print(f"[red]✗ Profil bulunamadı: {profile}[/red]")
+        raise typer.Exit(1)
 
-    from enabiz_ai.orchestrator import Orchestrator
-    orch = Orchestrator(config, master_passphrase=passphrase)
+    sync_svc = SyncService(config)
 
     async def _sync():
-        if target == "labs":
-            count = await orch.sync_lab_results()
-            console.print(f"[green]✓ {count} yeni tahlil raporu kaydedildi.[/green]")
-        elif target in ("rx", "prescriptions"):
-            count = await orch.sync_prescriptions()
-            console.print(f"[green]✓ {count} yeni reçete kaydedildi.[/green]")
-        elif target == "all":
-            results = await orch.sync_all()
-            table = Table(title="Senkronizasyon Sonuçları")
+        try:
+            res = await sync_svc.harvest_profile(p, target=target)
+            table = Table(title=f"Senkronizasyon Sonuçları: {p.display_name}")
             table.add_column("Kategori", style="cyan")
             table.add_column("Yeni Kayıt", style="green")
-            for category, count in results.items():
-                status = str(count) if count >= 0 else "❌ Hata"
-                table.add_row(category, status)
+            for cat, cnt in res.items():
+                table.add_row(cat, str(cnt))
             console.print(table)
-        else:
-            console.print(f"[red]Bilinmeyen hedef: {target}[/red]")
-            console.print("Geçerli hedefler: labs, rx, all")
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Senkronizasyon uyarısı: {e}[/yellow]")
 
     _run_async(_sync())
 
 
 @app.command()
-def parse(
-    file: Path = typer.Argument(..., help="Path to a lab result PDF to parse"),
-):
-    """📄 Parse a local lab result PDF and save to database."""
-    config = AppConfig()
-    _setup_logging(config.log_level)
-
-    if not file.exists():
-        console.print(f"[red]✗ Dosya bulunamadı: {file}[/red]")
-        raise typer.Exit(1)
-
-    passphrase = _get_passphrase()
-    from enabiz_ai.orchestrator import Orchestrator
-    orch = Orchestrator(config, master_passphrase=passphrase)
-
-    async def _parse():
-        await orch.parse_local_pdf(file)
-        console.print(f"[green]✓ {file.name} başarıyla ayrıştırıldı ve kaydedildi.[/green]")
-
-    _run_async(_parse())
-
-
-@app.command()
-def query(
-    data_type: str = typer.Argument("labs", help="Data type: labs, prescriptions"),
-    since: str = typer.Option(None, help="Filter from date (YYYY-MM-DD)"),
-    search: str = typer.Option(None, "--search", "-s", help="Search term"),
-    output_format: str = typer.Option("table", "--format", "-f", help="Output: table, json"),
-):
-    """🔍 Query stored health data."""
-    config = AppConfig()
-    _setup_logging(config.log_level)
-    passphrase = _get_passphrase()
-
-    from enabiz_ai.orchestrator import Orchestrator
-    orch = Orchestrator(config, master_passphrase=passphrase)
-
-    async def _query():
-        results = await orch.query_data(
-            data_type=data_type,
-            since=since,
-            search=search,
-        )
-
-        if output_format == "json":
-            console.print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
-        else:
-            if not results:
-                console.print("[dim]Sonuç bulunamadı.[/dim]")
-                return
-
-            table = Table(title=f"📋 {data_type.capitalize()} Sonuçları")
-
-            if data_type == "labs" and results:
-                table.add_column("Tarih", style="cyan")
-                table.add_column("Rapor ID", style="dim")
-                table.add_column("Test Sayısı", style="green")
-                table.add_column("Hastane", style="yellow")
-                for r in results:
-                    date = r.get("date", "")[:10]
-                    table.add_row(
-                        date,
-                        r.get("report_id", ""),
-                        str(len(r.get("tests", []))),
-                        r.get("hospital", "-"),
-                    )
-            elif search:
-                table.add_column("Kaynak", style="cyan")
-                table.add_column("Detay", style="white")
-                table.add_column("Tarih", style="dim")
-                for r in results:
-                    detail = r.get("test_name") or r.get("medication") or ""
-                    table.add_row(r.get("source", ""), detail, r.get("date", ""))
-
-            console.print(table)
-
-    _run_async(_query())
-
-
-@app.command()
-def export(
-    target: str = typer.Argument("csv", help="Export format: csv"),
-    table_name: str = typer.Option("lab_tests", "--table", "-t", help="Table to export"),
-    output: Path = typer.Option(None, "--output", "-o", help="Output file path"),
-):
-    """📤 Export health data to CSV."""
-    config = AppConfig()
-    _setup_logging(config.log_level)
-
-    if output is None:
-        output = Path(f"enabiz_{table_name}_{datetime.now():%Y%m%d}.csv")
-
-    from enabiz_ai.storage.database import HealthDatabase
-    db_path = config.data_dir / "health.db"
-
-    async def _export():
-        async with HealthDatabase(db_path) as db:
-            count = await db.export_csv(table_name, output)
-            console.print(f"[green]✓ {count} satır {output} dosyasına aktarıldı.[/green]")
-
-    _run_async(_export())
-
-
-@app.command()
 def status():
-    """📊 Show system status and statistics."""
+    """📊 Show system status and all registered family profiles."""
     config = AppConfig()
     _setup_logging(config.log_level)
 
     console.print(Panel(
-        f"[bold]e-Nabız AI Automation System[/bold]\n"
+        f"[bold]e-Nabız AI Multi-Profile Health Automation[/bold]\n"
         f"Versiyon: {__version__}",
         title="🏥 Sistem Durumu",
         border_style="blue",
     ))
 
-    # Config status
+    # Config table
     config_table = Table(title="⚙️ Yapılandırma")
     config_table.add_column("Ayar", style="cyan")
     config_table.add_column("Değer", style="white")
     config_table.add_row("Veri Dizini", str(config.data_dir))
     config_table.add_row("Ollama URL", config.ollama_base_url)
     config_table.add_row("Ollama Model", config.ollama_model)
-    config_table.add_row("Chrome CDP", config.chrome_cdp_url)
-    config_table.add_row("Headless", str(config.headless))
-    config_table.add_row(
-        "Telegram",
-        "✅ Yapılandırıldı" if config.telegram_bot_token else "❌ Yapılandırılmadı",
-    )
-
-    # Credential status
-    from enabiz_ai.credentials.manager import CredentialManager
-    cred_mgr = CredentialManager(config.data_dir)
-    config_table.add_row(
-        "Kimlik Bilgileri",
-        "✅ Kayıtlı" if cred_mgr.exists() else "❌ Kayıtlı değil",
-    )
-
+    config_table.add_row("Telegram", "✅ Yapılandırıldı" if config.telegram_bot_token else "❌ Yok")
     console.print(config_table)
 
-    # Database stats
-    db_path = config.data_dir / "health.db"
-    if db_path.exists():
-        from enabiz_ai.storage.database import HealthDatabase
-
-        async def _get_stats():
-            async with HealthDatabase(db_path) as db:
-                return await db.get_stats()
-
-        stats = _run_async(_get_stats())
-
-        db_table = Table(title="📊 Veritabanı İstatistikleri")
-        db_table.add_column("Tablo", style="cyan")
-        db_table.add_column("Kayıt Sayısı", style="green")
-        for table, count in stats.items():
-            db_table.add_row(table, str(count))
-        console.print(db_table)
-    else:
-        console.print("[dim]Henüz veritabanı oluşturulmadı.[/dim]")
-
-    # File store stats
-    from enabiz_ai.storage.file_store import FileStore
-    file_store = FileStore(config.data_dir / "data")
-    file_stats = file_store.get_stats()
-
-    file_table = Table(title="📁 Dosya Deposu")
-    file_table.add_column("Kategori", style="cyan")
-    file_table.add_column("Dosya Sayısı", style="green")
-    file_table.add_column("Boyut (MB)", style="yellow")
-    for category, info in file_stats.items():
-        file_table.add_row(category, str(info["count"]), str(info["total_size_mb"]))
-    console.print(file_table)
+    # Profiles table
+    pm = ProfileManager(config.data_dir)
+    profile_list()
 
     # Ollama connectivity
     console.print("\n[bold]🤖 Ollama Bağlantısı[/bold]")
@@ -369,24 +414,19 @@ def status():
         ollama_base_url=config.ollama_base_url,
         model=config.ollama_model,
     )
-
-    async def _check_ollama():
-        return await extractor.is_available()
-
     try:
-        ollama_ok = _run_async(_check_ollama())
-        if ollama_ok:
+        if _run_async(extractor.is_available()):
             console.print(f"  [green]✅ Ollama erişilebilir ({config.ollama_base_url})[/green]")
         else:
-            console.print(f"  [yellow]⚠️ Ollama erişilemiyor ({config.ollama_base_url})[/yellow]")
+            console.print(f"  [yellow]⚠️ Ollama yanıt vermiyor ({config.ollama_base_url})[/yellow]")
     except Exception:
-        console.print(f"  [red]❌ Ollama bağlantı hatası ({config.ollama_base_url})[/red]")
+        console.print(f"  [red]❌ Ollama bağlantı hatası[/red]")
 
 
 @app.command()
 def version():
     """Show version information."""
-    console.print(f"enabiz-ai v{__version__}")
+    console.print(f"enabiz-ai v{__version__}", highlight=False)
 
 
 if __name__ == "__main__":

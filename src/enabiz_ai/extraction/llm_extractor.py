@@ -4,13 +4,14 @@ Used as a fallback when Docling's table extraction doesn't produce
 clean results, or for free-text content like radiology reports.
 """
 
-from __future__ import annotations
-
+from datetime import datetime
+import hashlib
 import json
 import logging
 from typing import Optional
 
 import httpx
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from enabiz_ai.extraction.models import LabReport, LabTest, Prescription
 
@@ -83,6 +84,12 @@ class LLMExtractor:
         self.model = model
         self.timeout = timeout
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
+        reraise=True,
+    )
     async def _call_ollama(
         self,
         system_prompt: str,
@@ -192,12 +199,10 @@ class LLMExtractor:
         try:
             data = json.loads(response)
             raw_items = data.get("prescriptions", [])
-            from datetime import datetime
-            import hashlib
 
             for idx, item in enumerate(raw_items):
                 med_name = item.get("medication", "Unknown")
-                rx_id = hashlib.md5(f"{med_name}_{idx}".encode()).hexdigest()[:8]
+                rx_id = hashlib.sha256(f"{med_name}_{idx}".encode("utf-8")).hexdigest()[:12]
                 prescriptions.append(Prescription(
                     prescription_id=f"rx_{rx_id}",
                     date=datetime.now(),

@@ -133,31 +133,59 @@ For production use on your MSI DGX Spark:
    enabiz-ai sync all
    ```
 
+## Automated Testing
+
+The project includes a comprehensive automated test suite with unit, security, and integration tests:
+
+```powershell
+# Run using PowerShell launcher
+.\run_unit_tests.ps1
+
+# Or run with pytest directly
+.venv\Scripts\python.exe -m pytest tests -v
+```
+
+The test suite covers:
+- **Profile Validation & Path Traversal Defense** (`test_profiles.py`)
+- **PBKDF2/Fernet Credential & Session Encryption** (`test_credentials.py`, `test_session_manager.py`)
+- **Database Idempotent Upserts & Dedup** (`test_database.py`)
+- **Turkish Date Parsing & Lab Abnormality Evaluator** (`test_extraction.py`)
+- **PowerShell Injection Sanitization & HTML Output Escaping** (`test_security.py`)
+- **Clinical RAG Engine & Multi-Profile Batching** (`test_services.py`)
+- **Typer CLI Runner Operations** (`test_cli.py`)
+
 ## Project Structure
 
 ```
 src/enabiz_ai/
-├── cli.py                 # Typer CLI entry point
-├── config.py              # Pydantic Settings configuration
-├── orchestrator.py        # Main pipeline coordinator
+├── cli.py                 # Thin Typer CLI interface
+├── config.py              # Pydantic Settings configuration & cached paths
+├── exceptions.py          # Central exception hierarchy
+├── orchestrator.py        # Programmatic orchestration wrapper
+├── services/              # Core business services
+│   ├── pipeline.py        # SyncService (harvesting & clinical analysis)
+│   └── scheduler.py       # SchedulerService (Windows Task Scheduler)
+├── profiles/              # Multi-person family profile management
+│   ├── manager.py         # ProfileManager with isolated directories
+│   └── models.py          # ProfileInfo models
 ├── credentials/           # Encrypted credential storage
 │   ├── manager.py         # Fernet/PBKDF2 encryption
 │   └── models.py          # Credential Pydantic models
-├── twofa/                 # 2FA relay implementations
-│   ├── base.py            # Protocol definition
-│   ├── telegram_relay.py  # Telegram Bot relay
-│   └── console_relay.py   # Terminal fallback
 ├── browser/               # Browser automation
-│   ├── edevlet_login.py   # Deterministic e-Devlet login
-│   ├── enabiz_navigator.py # LLM-driven portal navigation
-│   └── session_manager.py # Cookie/session persistence
-├── extraction/            # Document parsing
-│   ├── models.py          # Health data Pydantic models
-│   ├── lab_parser.py      # Docling PDF table extraction
-│   └── llm_extractor.py   # Ollama-based text extraction
+│   ├── authenticator.py   # Visible Chrome browser interactive login
+│   ├── edevlet_login.py   # Deterministic e-Devlet authentication
+│   └── session_manager.py # Cookie persistence with Fernet encryption at rest
+├── extraction/            # Document and portal parsing
+│   ├── harvester.py       # Direct portal harvesting with SHA-256 IDs
+│   ├── lab_parser.py      # Docling PDF table extraction & abnormality checks
+│   ├── llm_extractor.py   # Ollama-based text extraction with tenacity retries
+│   └── models.py          # Health data Pydantic models
+├── analysis/              # Clinical AI synthesis
+│   └── rag_engine.py      # Longitudinal RAG synthesis with HTML sanitization
 └── storage/               # Data persistence
-    ├── database.py        # Async SQLite (aiosqlite)
-    └── file_store.py      # Organized file storage
+    ├── repository.py      # HealthRepository Protocol interface
+    ├── database.py        # Async SQLite database (aiosqlite)
+    └── file_store.py      # Categorized local health file storage
 ```
 
 ## License

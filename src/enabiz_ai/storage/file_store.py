@@ -200,15 +200,24 @@ class FileStore:
     def _sanitize_filename(filename: str) -> str:
         """Remove or replace characters that are unsafe for filenames.
 
+        Handles null bytes, control characters, Windows reserved characters, and unicode.
+
         Args:
             filename: Original filename.
 
         Returns:
             Sanitized filename.
         """
-        # Replace Turkish special chars and unsafe chars
+        import unicodedata
+
+        # Remove null bytes and control chars
+        cleaned = "".join(ch for ch in filename if ch != "\x00" and ord(ch) >= 32)
+        cleaned = unicodedata.normalize("NFKC", cleaned)
+
+        # Replace Windows/POSIX reserved characters
         unsafe = '<>:"/\\|?*'
-        result = filename
         for char in unsafe:
-            result = result.replace(char, "_")
-        return result.strip(". ")
+            cleaned = cleaned.replace(char, "_")
+
+        sanitized = cleaned.strip(". ")
+        return sanitized or "unnamed_file"

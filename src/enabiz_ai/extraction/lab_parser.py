@@ -11,10 +11,13 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+try:
+    import pandas as pd
+except ImportError:
+    pd = None  # type: ignore
 
-import pandas as pd
-
+from enabiz_ai.exceptions import DateParseError
 from enabiz_ai.extraction.models import LabReport, LabTest, TURKISH_LAB_COLUMNS
 
 logger = logging.getLogger(__name__)
@@ -134,7 +137,7 @@ class LabParser:
             raw_text=text[:5000],
         )
 
-    def _parse_table(self, df: pd.DataFrame) -> list[LabTest]:
+    def _parse_table(self, df: Any) -> list[LabTest]:
         """Parse a pandas DataFrame (from Docling table) into LabTest objects.
 
         Maps Turkish column names to English fields using TURKISH_LAB_COLUMNS.
@@ -249,17 +252,17 @@ class LabParser:
     def _check_abnormal(
         value: str,
         reference_range: Optional[str],
-        notes: Optional[str],
+        notes: Optional[str] = None,
     ) -> Optional[bool]:
         """Determine if a lab value is abnormal.
 
         Checks:
         1. Turkish flag markers (Y=Yüksek/High, D=Düşük/Low)
-        2. Numeric comparison against reference range
+        2. Numeric comparison against reference range (both interval and < / > thresholds)
 
         Args:
             value: The test result value.
-            reference_range: The normal reference range (e.g., "12.0-16.0").
+            reference_range: The normal reference range (e.g., "12.0-16.0", "< 1.0", "> 30").
             notes: Additional flags or notes.
 
         Returns:
@@ -279,11 +282,22 @@ class LabParser:
         if reference_range:
             try:
                 numeric_value = float(re.sub(r"[^\d.]", "", value))
+                ref_clean = reference_range.strip()
+
+                # Parse "< 1.0"
+                match_lt = re.match(r"<\s*([\d.]+)", ref_clean)
+                if match_lt:
+                    high = float(match_lt.group(1))
+                    return numeric_value >= high
+
+                # Parse "> 30"
+                match_gt = re.match(r">\s*([\d.]+)", ref_clean)
+                if match_gt:
+                    low = float(match_gt.group(1))
+                    return numeric_value <= low
+
                 # Parse range like "12.0-16.0" or "12.0 - 16.0"
-                match = re.match(
-                    r"([\d.]+)\s*[-–]\s*([\d.]+)",
-                    reference_range.strip(),
-                )
+                match = re.match(r"([\d.]+)\s*[-–]\s*([\d.]+)", ref_clean)
                 if match:
                     low = float(match.group(1))
                     high = float(match.group(2))
@@ -295,12 +309,12 @@ class LabParser:
 
     @staticmethod
     def _generate_report_id(pdf_path: Path) -> str:
-        """Generate a deterministic report ID from the file path."""
-        content_hash = hashlib.md5(str(pdf_path).encode()).hexdigest()[:8]
+        """Generate a deterministic report ID from the file path using SHA-256."""
+        content_hash = hashlib.sha256(str(pdf_path).encode("utf-8")).hexdigest()[:12]
         return f"lab_{pdf_path.stem}_{content_hash}"
 
     @staticmethod
-    def _extract_date(filename: str, text: str) -> datetime:
+    def _extract_date(filename: str, text: str, default: datetime | None = None) -> datetime:
         """Try to extract a date from the filename or text content.
 
         Looks for common date patterns:
@@ -309,9 +323,13 @@ class LabParser:
         Args:
             filename: The PDF filename (without extension).
             text: Raw text content.
+            default: Optional fallback datetime if not found.
 
         Returns:
-            Extracted datetime, or current time if not found.
+            Extracted datetime, or default if provided.
+
+        Raises:
+            DateParseError: If no date could be extracted and no default is provided.
         """
         # Common date patterns
         patterns = [
@@ -331,5 +349,8 @@ class LabParser:
                 except ValueError:
                     continue
 
-        logger.debug("Could not extract date from filename/text, using current time")
-        return datetime.now()
+        if default is not None:
+            logger.warning("Could not extract date from filename/text, using default: %s", default)
+            return default
+
+        raise DateParseError(f"Could not extract date from filename '{filename}' or text content")

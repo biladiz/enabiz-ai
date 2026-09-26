@@ -37,7 +37,19 @@ venv.bak/
 
 # Project specifics
 credentials.enc.json
+*.enc
+*.enc.json
+*.db
+*.sqlite
+*.sqlite3
+storage_state.json
+session/
+screenshots/
+profiles/
 *.pdf
 data/
 .pytest_cache/
 .ruff_cache/
+
+# Added by ggshield
+.cache_ggshield

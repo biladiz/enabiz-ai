@@ -78,6 +78,26 @@ CREATE TABLE IF NOT EXISTS vaccinations (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS diagnoses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    diagnosis TEXT NOT NULL,
+    clinic TEXT,
+    doctor TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS visits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT,
+    hospital TEXT,
+    clinic TEXT,
+    doctor TEXT,
+    tracking_no TEXT,
+    raw_details TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sync_type TEXT NOT NULL,
@@ -93,6 +113,8 @@ CREATE INDEX IF NOT EXISTS idx_lab_reports_date ON lab_reports(date);
 CREATE INDEX IF NOT EXISTS idx_lab_tests_report ON lab_tests(report_id);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_date ON prescriptions(date);
 CREATE INDEX IF NOT EXISTS idx_radiology_date ON radiology_reports(date);
+CREATE INDEX IF NOT EXISTS idx_diagnoses_date ON diagnoses(date);
+CREATE INDEX IF NOT EXISTS idx_visits_date ON visits(date);
 CREATE INDEX IF NOT EXISTS idx_sync_log_type ON sync_log(sync_type);
 """
 
@@ -148,7 +170,8 @@ class HealthDatabase:
         Returns:
             True if saved, False if already exists (dedup).
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         # Check for duplicate
         cursor = await self._conn.execute(
@@ -205,7 +228,8 @@ class HealthDatabase:
         Returns:
             List of LabReport objects with their tests.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         query = "SELECT * FROM lab_reports WHERE 1=1"
         params: list = []
@@ -261,7 +285,8 @@ class HealthDatabase:
         Returns:
             True if saved, False if duplicate.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         cursor = await self._conn.execute(
             "SELECT 1 FROM prescriptions WHERE prescription_id = ?",
@@ -292,7 +317,8 @@ class HealthDatabase:
         self, since: Optional[datetime] = None
     ) -> list[Prescription]:
         """Retrieve prescriptions, optionally filtered by date."""
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         query = "SELECT * FROM prescriptions"
         params: list = []
@@ -319,6 +345,77 @@ class HealthDatabase:
 
         return prescriptions
 
+    # ── Diagnoses ──────────────────────────────────────────────────
+
+    async def save_diagnosis(self, date: str, diagnosis: str, clinic: str | None = None, doctor: str | None = None) -> bool:
+        """Save a diagnosis record. Skips duplicate entries."""
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
+        cursor = await self._conn.execute(
+            "SELECT 1 FROM diagnoses WHERE date = ? AND diagnosis = ?",
+            (date, diagnosis),
+        )
+        if await cursor.fetchone():
+            return False
+
+        await self._conn.execute(
+            """INSERT INTO diagnoses (date, diagnosis, clinic, doctor)
+               VALUES (?, ?, ?, ?)""",
+            (date, diagnosis, clinic, doctor),
+        )
+        await self._conn.commit()
+        return True
+
+    async def get_diagnoses(self) -> list[dict]:
+        """Retrieve all diagnoses ordered by date descending."""
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
+        results = []
+        async with self._conn.execute("SELECT * FROM diagnoses ORDER BY date DESC") as cursor:
+            async for row in cursor:
+                results.append(dict(row))
+        return results
+
+    # ── Doctor Visits ──────────────────────────────────────────────
+
+    async def save_visit(self, date: str | None, hospital: str | None, clinic: str | None = None, doctor: str | None = None, tracking_no: str | None = None, raw_details: str | None = None) -> bool:
+        """Save a doctor visit record."""
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
+
+        # Dedup: check by tracking_no if available, otherwise by composite key
+        if tracking_no:
+            cursor = await self._conn.execute("SELECT 1 FROM visits WHERE tracking_no = ?", (tracking_no,))
+            if await cursor.fetchone():
+                return False
+        else:
+            # BUG-2 fix: Composite dedup key for visits without tracking number
+            detail_snippet = (raw_details or "")[:100]
+            cursor = await self._conn.execute(
+                "SELECT 1 FROM visits WHERE date = ? AND hospital = ? AND SUBSTR(COALESCE(raw_details, ''), 1, 100) = ?",
+                (date, hospital, detail_snippet),
+            )
+            if await cursor.fetchone():
+                return False
+
+        await self._conn.execute(
+            """INSERT INTO visits (date, hospital, clinic, doctor, tracking_no, raw_details)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (date, hospital, clinic, doctor, tracking_no, raw_details),
+        )
+        await self._conn.commit()
+        return True
+
+    async def get_visits(self) -> list[dict]:
+        """Retrieve all doctor visits ordered by date descending."""
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
+        results = []
+        async with self._conn.execute("SELECT * FROM visits ORDER BY date DESC") as cursor:
+            async for row in cursor:
+                results.append(dict(row))
+        return results
+
     # ── Sync Log ───────────────────────────────────────────────────
 
     async def get_latest_sync(self, sync_type: str = "all") -> Optional[datetime]:
@@ -330,7 +427,8 @@ class HealthDatabase:
         Returns:
             Datetime of last sync, or None if never synced.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         cursor = await self._conn.execute(
             """SELECT completed_at FROM sync_log
@@ -358,7 +456,8 @@ class HealthDatabase:
             status: Sync status ('completed', 'failed', 'partial').
             notes: Additional notes.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
 
         await self._conn.execute(
             """INSERT INTO sync_log (sync_type, status, records_synced, started_at, notes)
@@ -378,7 +477,8 @@ class HealthDatabase:
         Returns:
             List of matching records as dicts with source table info.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
         results = []
         search_term = f"%{query}%"
 
@@ -424,8 +524,9 @@ class HealthDatabase:
         Returns:
             Number of rows exported.
         """
-        assert self._conn is not None
-        allowed_tables = {"lab_reports", "lab_tests", "prescriptions", "radiology_reports", "vaccinations", "sync_log"}
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
+        allowed_tables = {"lab_reports", "lab_tests", "prescriptions", "radiology_reports", "vaccinations", "diagnoses", "visits", "sync_log"}
         if table not in allowed_tables:
             raise ValueError(f"Invalid table: {table}. Allowed: {allowed_tables}")
 
@@ -448,15 +549,17 @@ class HealthDatabase:
         logger.info("Exported %d rows from %s to %s", len(rows), table, output_path)
         return len(rows)
 
-    async def get_stats(self) -> dict:
+    async def get_stats(self) -> dict[str, int]:
         """Get database statistics.
 
         Returns:
             Dict with counts for each table.
         """
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Database not initialized. Use 'async with HealthDatabase(path) as db:' context manager.")
         stats = {}
-        for table in ("lab_reports", "lab_tests", "prescriptions", "radiology_reports", "vaccinations"):
+        allowed_tables = ("lab_reports", "lab_tests", "prescriptions", "radiology_reports", "vaccinations", "diagnoses", "visits")
+        for table in allowed_tables:
             cursor = await self._conn.execute(f"SELECT COUNT(*) as cnt FROM {table}")  # noqa: S608
             row = await cursor.fetchone()
             stats[table] = row["cnt"] if row else 0

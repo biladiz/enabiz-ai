@@ -14,11 +14,13 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
 from enabiz_ai.browser.session_manager import SessionManager
 from enabiz_ai.credentials.models import Credentials
+from enabiz_ai.twofa.base import TwoFARelay
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────
-EDEVLET_LOGIN_URL = "https://giris.turkiye.gov.tr/Giris/gir?s=enabiz"
+EDEVLET_SERVICE_URL = "https://www.turkiye.gov.tr/saglik-bakanligi-e-nabiz-kisisel-saglik-sistemi"
+EDEVLET_LOGIN_URL = "https://giris.turkiye.gov.tr/Giris/gir"
 ENABIZ_DASHBOARD_URL = "enabiz.gov.tr"
 
 # Politeness delays (seconds) to avoid triggering anti-bot
@@ -35,9 +37,9 @@ SELECTORS = {
     # Login/submit button
     "submit_button": 'button[type="submit"], input[type="submit"], #submitButton, .submitBtn',
     # OTP/SMS verification code input
-    "otp_input": 'input[name="otpField"], input[id="otpField"], input[name="smsCode"], input[placeholder*="Doğrulama"]',
+    "otp_input": 'input[name="singleFactorOtpField"], input[id="singleFactorOtpField"], input[name="otpField"], input[id="otpField"], input[name="smsCode"], input[name*="Otp"], input[id*="Otp"], input[placeholder*="Doğrulama"]',
     # OTP submit button
-    "otp_submit": '#otpSubmitBtn, button[type="submit"]',
+    "otp_submit": '#otpSubmitBtn, input[value*="Onayla"], button:has-text("Onayla"), button[type="submit"], input[type="submit"]',
     # CAPTCHA indicators
     "captcha": '.captcha, #captchaImage, [class*="captcha"], [id*="captcha"]',
     # Error messages
@@ -74,7 +76,7 @@ class EDevletLogin:
     def __init__(
         self,
         session_manager: SessionManager,
-        twofa_relay,  # TwoFARelay protocol
+        twofa_relay: TwoFARelay,
         credentials: Credentials,
     ) -> None:
         """Initialize the login handler.
@@ -138,10 +140,10 @@ class EDevletLogin:
             await self._handle_2fa(page)
 
             # Step 7: Verify we reached e-Nabız
-            await self._verify_dashboard(page)
+            target_page = await self._verify_dashboard(page)
 
             # Step 8: Save session
-            context = page.context
+            context = target_page.context
             await self.session_manager.save_storage_state(context)
 
             logger.info("Login successful!")
@@ -158,10 +160,25 @@ class EDevletLogin:
             raise
 
     async def _navigate_to_login(self, page: Page) -> None:
-        """Navigate to the e-Devlet login page."""
-        logger.info("Navigating to %s", EDEVLET_LOGIN_URL)
-        await page.goto(EDEVLET_LOGIN_URL, wait_until="networkidle", timeout=30000)
+        """Navigate to the e-Devlet service page and open login gateway."""
+        logger.info("Navigating to e-Devlet service page: %s", EDEVLET_SERVICE_URL)
+        await page.goto(EDEVLET_SERVICE_URL, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(DELAY_AFTER_PAGE_LOAD)
+
+        # If already on dashboard or e-Nabız
+        if ENABIZ_DASHBOARD_URL in page.url:
+            logger.info("Already on e-Nabız dashboard")
+            return
+
+        # Check if we need to click "Kimliğimi Şimdi Doğrula" to enter giris.turkiye.gov.tr
+        login_btn = await page.query_selector(
+            "a.btn-login, a[href*='giris.turkiye.gov.tr'], a.btn:has-text('Kimliğimi Şimdi Doğrula'), a:has-text('Giriş Yap')"
+        )
+        if login_btn:
+            logger.info("Clicking 'Kimliğimi Şimdi Doğrula' to proceed to login gateway...")
+            await login_btn.click()
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(DELAY_AFTER_PAGE_LOAD)
 
         # Verify we're on the login page
         current_url = page.url
@@ -211,25 +228,43 @@ class EDevletLogin:
                 raise LoginError(f"e-Devlet login error: {error_text.strip()}")
 
     async def _handle_2fa(self, page: Page) -> None:
-        """Handle SMS OTP verification if the 2FA page appears."""
+        """Handle SMS OTP verification or mobile app push approval."""
         # Check if we've already been redirected (no 2FA needed)
-        if ENABIZ_DASHBOARD_URL in page.url:
-            logger.info("No 2FA required — already redirected to e-Nabız")
+        if ENABIZ_DASHBOARD_URL in page.url or "kisisel-saglik-sistemi" in page.url:
+            logger.info("No 2FA required — already on service or dashboard")
             return
+
+        # Check if Mobile App Notification Approval (Mobil Onay) is active
+        page_content = await page.content()
+        if "İki Aşamalı Giriş Onay" in page_content or "bildirime tıklayarak" in page_content or "Kayıtlı Cihaz" in page_content:
+            logger.info("Mobile push approval (Mobil Onay) detected — waiting for user approval on phone")
+            await self.twofa.send_notification(
+                "📱 *e-Devlet Mobil Onay Bildirimi Gönderildi*\n\n"
+                "Lütfen telefonunuzdaki e-Devlet uygulamasını açıp girişi onaylayın. "
+                "Onay bekleniyor..."
+            )
+            # Wait for user to approve on phone (page will automatically navigate away)
+            for _ in range(90):
+                await asyncio.sleep(1.0)
+                if "giris.turkiye.gov.tr/Giris" not in page.url:
+                    logger.info("Mobile notification approved! URL changed to: %s", page.url)
+                    return
+                # Check if SMS OTP input appeared as a fallback
+                otp_input = await page.query_selector(SELECTORS["otp_input"])
+                if otp_input:
+                    logger.info("SMS OTP input appeared as fallback")
+                    break
 
         # Look for the OTP input field
         otp_input = await page.query_selector(SELECTORS["otp_input"])
         if not otp_input:
-            # Try waiting a bit for the 2FA page to load
             await asyncio.sleep(2.0)
             otp_input = await page.query_selector(SELECTORS["otp_input"])
 
         if not otp_input:
-            # Maybe we got redirected without 2FA
-            if ENABIZ_DASHBOARD_URL in page.url:
+            if ENABIZ_DASHBOARD_URL in page.url or "kisisel-saglik-sistemi" in page.url:
                 return
-            # Take a screenshot and try to identify what page we're on
-            logger.warning("No OTP field found and not on dashboard — unknown state")
+            logger.warning("No OTP field found and not on dashboard — checking URL: %s", page.url)
             await self._save_debug_screenshot(page, "unknown_state_after_login")
             return
 
@@ -252,7 +287,6 @@ class EDevletLogin:
         if otp_submit:
             await otp_submit.click()
         else:
-            # Try pressing Enter as fallback
             await otp_input.press("Enter")
 
         await asyncio.sleep(DELAY_AFTER_PAGE_LOAD)
@@ -261,25 +295,74 @@ class EDevletLogin:
         except PlaywrightTimeout:
             logger.debug("Network didn't fully settle after OTP — continuing")
 
-    async def _verify_dashboard(self, page: Page) -> None:
+    async def _verify_dashboard(self, page: Page) -> Page:
         """Verify that we've successfully reached the e-Nabız dashboard."""
-        # Wait for redirect to e-Nabız
+        target_page = page
+
+        # Check if service page displays 'Uygulamaya Git' (a.ssoLink) and click it
+        for _ in range(15):
+            for p in page.context.pages:
+                if ENABIZ_DASHBOARD_URL in p.url:
+                    target_page = p
+                    break
+            if ENABIZ_DASHBOARD_URL in target_page.url:
+                break
+
+            sso_link = await page.query_selector("a.ssoLink, a:has-text('Uygulamaya Git')")
+            if sso_link:
+                logger.info("Found 'Uygulamaya Git' (ssoLink) button — clicking to open e-Nabız...")
+                try:
+                    async with page.context.expect_page(timeout=10000) as new_page_info:
+                        await sso_link.click()
+                    target_page = await new_page_info.value
+                    logger.info("New tab opened: %s", target_page.url)
+                except Exception:
+                    await sso_link.click()
+                break
+            await asyncio.sleep(1.0)
+
+        # On the target tab, handle OAuth authorization consent ('Onayla' button)
+        for _ in range(15):
+            for p in page.context.pages:
+                if "AuthorizationController" in p.url or ENABIZ_DASHBOARD_URL in p.url:
+                    target_page = p
+                    break
+
+            if "AuthorizationController" in target_page.url:
+                logger.info("OAuth Authorization page detected. Looking for 'Onayla' button...")
+                onayla_btn = await target_page.query_selector("input[value='Onayla'], button:has-text('Onayla'), .btn-send")
+                if onayla_btn:
+                    logger.info("Clicking OAuth 'Onayla' button...")
+                    await onayla_btn.click()
+                    await asyncio.sleep(2.0)
+                    break
+
+            if ENABIZ_DASHBOARD_URL in target_page.url:
+                break
+            await asyncio.sleep(1.0)
+
+        # Wait for redirect to e-Nabız dashboard
         try:
-            await page.wait_for_url(
+            await target_page.wait_for_url(
                 f"**/{ENABIZ_DASHBOARD_URL}/**",
-                timeout=20000,
+                timeout=25000,
             )
-            logger.info("Successfully redirected to e-Nabız dashboard")
+            logger.info("Successfully redirected to e-Nabız dashboard: %s", target_page.url)
         except PlaywrightTimeout:
-            current_url = page.url
-            if ENABIZ_DASHBOARD_URL in current_url:
-                logger.info("On e-Nabız dashboard: %s", current_url)
-            else:
+            for p in page.context.pages:
+                if ENABIZ_DASHBOARD_URL in p.url:
+                    target_page = p
+                    break
+
+            if ENABIZ_DASHBOARD_URL not in target_page.url:
+                current_url = target_page.url
                 logger.error("Failed to reach e-Nabız dashboard. Current URL: %s", current_url)
-                await self._save_debug_screenshot(page, "dashboard_redirect_failed")
+                await self._save_debug_screenshot(target_page, "dashboard_redirect_failed")
                 raise LoginError(
                     f"Failed to redirect to e-Nabız. Stuck at: {current_url}"
                 )
+
+        return target_page
 
     async def _detect_captcha(self, page: Page) -> bool:
         """Check if a CAPTCHA challenge is present on the page."""

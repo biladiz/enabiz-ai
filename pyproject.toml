@@ -11,7 +11,6 @@ dependencies = [
     "browser-use>=0.2",
     "playwright",
     "langchain-ollama",
-    "docling",
     "python-telegram-bot>=21.0",
     "cryptography",
     "aiosqlite",
@@ -21,12 +20,17 @@ dependencies = [
     "rich",
     "httpx",
     "python-dotenv",
+    "tenacity>=8.0",
 ]
 
 [project.optional-dependencies]
+pdf = [
+    "docling",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-mock",
     "ruff",
 ]
 

@@ -1,3 +1,4 @@
+from functools import cached_property
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,41 +33,38 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
-    @property
+    @cached_property
     def data_dir(self) -> Path:
         """Get the base data directory and ensure it exists."""
         path = Path(os.path.expanduser(self.enabiz_data_dir))
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
+    @cached_property
     def downloads_dir(self) -> Path:
         """Directory for general downloads."""
         path = self.data_dir / "downloads"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
+    @cached_property
     def lab_results_dir(self) -> Path:
         """Directory for laboratory results."""
         path = self.data_dir / "lab_results"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
+    @cached_property
     def prescriptions_dir(self) -> Path:
         """Directory for prescriptions."""
         path = self.data_dir / "prescriptions"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
+    @cached_property
     def radiology_dir(self) -> Path:
         """Directory for radiology reports."""
         path = self.data_dir / "radiology"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-
-# Create a global config instance
-config = AppConfig()

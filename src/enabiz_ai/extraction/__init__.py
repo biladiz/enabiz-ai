@@ -8,7 +8,11 @@ from .models import (
     VaccinationRecord,
     HealthSummary,
 )
-from .lab_parser import LabParser
+try:
+    from .lab_parser import LabParser
+except ImportError:
+    LabParser = None  # type: ignore
+
 from .llm_extractor import LLMExtractor
 
 __all__ = [
