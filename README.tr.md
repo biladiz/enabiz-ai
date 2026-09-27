@@ -228,6 +228,11 @@ src/enabiz_ai/
     └── file_store.py      # Kategorize edilmiş yerel sağlık dosyası depolama
 ```
 
+## Yol Haritası ve Gelecek Planları
+
+- 🗺️ **[Ürün Yol Haritası ve İş Listesi (ROADMAP.md)](ROADMAP.md)**: Yakın dönem geliştirmeleri ve aşama takibi.
+- 🏥 **[Barındırılan Abonelik Hizmeti Mimarisi (Maksimum 50 Kullanıcı)](docs/HOSTED_SUBSCRIPTION_PLAN.md)**: Kod çalıştırmak veya terminal kullanmak istemeyen kullanıcılar için Telegram tabanlı yönetilen konsiyerj hizmetinin teknik mimarisi ve güvenlik planı.
+
 ## Lisans
 
 MIT Lisansı — Kişisel ve eğitim amaçlı kullanım. Ayrıntılar için [LISANS.md](LISANS.md) dosyasına bakınız.

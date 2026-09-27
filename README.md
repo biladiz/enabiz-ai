@@ -228,6 +228,11 @@ src/enabiz_ai/
     └── file_store.py      # Categorized local health file storage
 ```
 
+## Roadmap & Future Plans
+
+- 🗺️ **[Product Roadmap & Backlog](ROADMAP.md)**: Near-term enhancements and milestone tracking.
+- 🏥 **[Hosted Subscription Service Blueprint (Max 50 Users)](docs/HOSTED_SUBSCRIPTION_PLAN.md)**: Architectural blueprint and technical backlog for a managed, no-code Telegram concierge service for users who don't want to run local code.
+
 ## License
 
 MIT License — Personal and educational use. See [LICENSE](LICENSE) and [LISANS.md](LISANS.md) for full terms and medical/legal disclaimers.
