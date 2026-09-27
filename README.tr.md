@@ -37,7 +37,7 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 - **Çift Giriş Yöntemi ve Otomatik Yedekleme** — e-Devlet veya doğrudan e-Nabız şifresi ile giriş; birincil yöntem başarısız olursa ikincisine otomatik geçiş
 - **Esnek 2FA Desteği** — Telegram Bot ile SMS onay iletimi veya konsol yedeği; 2FA'lı ve 2FA'sız hesaplar desteklenir
 - **Çoklu Profil Yalıtımı** — Her aile bireyi için izole şifreli kimlikler, sağlık kayıtları ve dosya dizinleri
-- **İkili Uzmanlaşmış Yerel Model Stratejisi** — Derin klinik teşhis ve uzun dönemli analiz için DeepSeek-R1 (70B/32B), görsel arayüz ve OCR için Qwen2.5-VL (14B)
+- **Uzmanlaşmış Yerel Tıbbi Modeller** — Klinik elektronik sağlık kaydı analizi için Google MedGemma (27B) ve DeepSeek-R1 (70B/32B), görsel arayüz ve OCR için Qwen2.5-VL (14B)
 - **Hibrit tarayıcı otomasyonu** — Giriş işlemleri için kararlı Playwright, portal içi gezinme için LLM destekli gezgin
 - **Şifreli kimlik saklama** (Fernet + PBKDF2) — Parola asla LLM'e veya açık metin olarak diske aktarılmaz
 - **PDF ayrıştırma** — Tıbbi laboratuvar tabloları için TableFormer destekli IBM Docling entegrasyonu
@@ -65,13 +65,14 @@ playwright install chromium
 # 1. Görsel gezinme ve OCR modeli (kalıcı yuva 1)
 ollama pull qwen2.5-vl:14b
 
-# 2. Klinik teşhis ve akıl yürütme modeli (kalıcı yuva 2)
+# 2. Klinik teşhis ve sağlık analizi modelleri (kalıcı yuva 2)
+# Seçenek A: DeepSeek-R1 70B (Derin akıl yürütmeli klinik teşhis)
 ollama pull deepseek-r1:70b
-# veya daha hafif bellek kullanımı için:
-# ollama pull deepseek-r1:32b
+# Seçenek B: Google MedGemma 27B (Google Health AI alan-özgü klinik sentez)
+ollama pull medgemma:27b
 ```
 
-> **Tailscale ile MSI EdgeXpert 13SUS Kullanımı:** NVIDIA GB10 Grace Blackwell Superchip üzerindeki 128 GB birleşik bellek ile her iki model de belleğe kalıcı olarak yerleşir ve model takas gecikmesi yaşanmaz (`OLLAMA_MAX_LOADED_MODELS=2`). `.env` dosyanızda şu şekilde tanımlayın: `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434`
+> **Tailscale ile MSI EdgeXpert 13SUS Kullanımı:** NVIDIA GB10 Grace Blackwell Superchip üzerindeki 128 GB birleşik bellek ile birden fazla uzmanlaşmış model belleğe kalıcı olarak yerleşir ve model takas gecikmesi yaşanmaz (`OLLAMA_MAX_LOADED_MODELS=2`). `.env` dosyanızda şu şekilde tanımlayın: `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434`
 
 ### 3. Telegram Bot Kurulumu (Önerilen)
 

@@ -17,11 +17,15 @@ class AppConfig(BaseSettings):
     ollama_model: str = Field(default="deepseek-r1:70b", description="Default/primary model")
     model_clinical: str = Field(
         default="deepseek-r1:70b",
-        description="Deep clinical reasoning model (DeepSeek-R1 70B distilled on Blackwell)",
+        description="Clinical reasoning engine: 'deepseek-r1:70b' (deep diagnostic reasoning) or 'medgemma:27b' (Google domain-native clinical EHR synthesis)",
     )
     model_vision: str = Field(
         default="qwen2.5-vl:14b",
         description="Visual web navigation and medical document OCR model",
+    )
+    model_radiology: str = Field(
+        default="medgemma:27b",
+        description="Multimodal medical imaging and radiology report interpretation model (Google MedGemma 27B / MedSigLIP)",
     )
     model_extraction: str = Field(
         default="qwen2.5:7b",

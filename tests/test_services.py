@@ -93,3 +93,20 @@ class TestServices:
         assert "</think>" not in report
         assert "Ruling out acute hepatitis" not in report
         assert "Klinik Sonuç: Karaciğer enzimlerinde hafif yükselme" in report
+
+    @patch("httpx.AsyncClient.post")
+    async def test_rag_engine_medgemma_model_support(self, mock_post, temp_db: HealthDatabase):
+        from unittest.mock import MagicMock
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": "🏥 MedGemma Klinik Değerlendirme:\n• Hemoglobin ve Ferritin değerleri normal sınırlardadır."
+            }
+        }
+        mock_post.return_value = mock_response
+
+        rag = RAGEngine(db=temp_db, model="medgemma:27b")
+        report = await rag.generate_weekly_report(person_name="Fatma")
+        assert "MedGemma Klinik Değerlendirme" in report
+        assert "Hemoglobin ve Ferritin" in report

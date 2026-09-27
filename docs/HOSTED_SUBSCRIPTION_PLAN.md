@@ -106,10 +106,12 @@ Environment="OLLAMA_KEEP_ALIVE=-1"
   - Worker concurrency limited to **2 simultaneous browser jobs** (using 2 of 20 ARM cores and ~4 GB RAM).
   - 7 users × 3 minutes = **21 minutes total browser runtime per night**.
 
-#### B. LLM Inference Load (Dual Models on GB10 Superchip)
+#### B. LLM Inference Load (Specialized Models on GB10 Superchip)
 - **Vision Extraction:** `qwen2.5-vl:14b` processes portal screenshots and lab report PDFs in ~3–5 seconds.
-- **Clinical Synthesis:** `deepseek-r1:70b` performs multi-year longitudinal biomarker correlation and diagnostic reasoning in ~30–60 seconds per subscriber. Internal `<think>` reasoning traces are logged defensively, while concise clinical summaries are delivered to Telegram.
-- **Total Nightly Inference:** 7 users × 1 minute = **~7 minutes per night**.
+- **Clinical Synthesis:** 
+  - Standard weekly summaries run via **Google MedGemma 27B** (~8–12 seconds per subscriber, native EHR clinical grounding, minimal hallucination risk).
+  - Deep longitudinal differential reasoning runs via **DeepSeek-R1 70B** (~30–60 seconds per subscriber, `<think>` traces logged defensively and stripped for Telegram).
+- **Total Nightly Inference:** 7 users × ~15–30 seconds = **~2–4 minutes per night**.
 - Leaves 99% of compute free for interactive on-demand Telegram questions during daytime hours.
 
 #### C. Failover & Service Continuity
@@ -129,7 +131,7 @@ Handling third-party medical records is subject to strict regulatory, ethical, a
 - **Legal Categorization:** Health records are **"Özel Nitelikli Kişisel Veri" (Sensitive Personal Data)** under Article 6 of Turkish Law No. 6698 (KVKK).
 - **Mandatory Requirements:**
   1. **Explicit Consent (Açık Rıza):** The onboarding bot must obtain unambiguous, logged explicit consent covering health data processing.
-  2. **Data Localization:** Health records must remain hosted on infrastructure under direct control; raw patient data is **never sent to US cloud APIs** (OpenAI, Anthropic, Google). Local Ollama on the DGX Spark fulfills this strictly.
+  2. **Data Localization:** Health records must remain hosted on infrastructure under direct control; raw patient data is **never sent to US cloud APIs** (OpenAI, Anthropic, Google). Local Ollama on the MSI EdgeXpert 13SUS fulfills this strictly.
   3. **Right to Erasure (Unutulma Hakkı):** A `/delete_my_data` command in Telegram must permanently wipe the user's isolated SQLite database, cookies, and backups within 24 hours.
 
 ### 3.2 Credential Protection Strategy (Zero-Master-Password Architecture)

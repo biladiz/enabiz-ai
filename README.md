@@ -37,7 +37,7 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 - **Dual-Method Authentication & Auto-Fallback** — Log in using e-Devlet or direct e-Nabız credentials; store both for automated fallback
 - **Flexible 2FA Support** — Telegram OTP relay or console fallback; supports 2FA-enabled and 2FA-exempt accounts
 - **Multi-Profile Isolation** — Separate encrypted credentials, health records, and storage sandboxes for each family member
-- **Dual Specialized Local Models** — DeepSeek-R1 (70B/32B) for clinical diagnostic reasoning and Qwen2.5-VL (14B) for visual web navigation and OCR
+- **Specialized Local Medical Models** — Google MedGemma (27B) & DeepSeek-R1 (70B/32B) for clinical EHR evaluation, and Qwen2.5-VL (14B) for visual web navigation and OCR
 - **Hybrid browser automation** — Deterministic Playwright for login, LLM-driven for portal navigation
 - **Encrypted credentials** (Fernet + PBKDF2) — Passwords never exposed to LLM or stored in plain text
 - **PDF parsing** using IBM Docling with TableFormer for medical lab tables
@@ -65,13 +65,14 @@ Install [Ollama](https://ollama.com/) and pull the specialized models:
 # 1. Vision navigation & OCR model (permanent slot 1)
 ollama pull qwen2.5-vl:14b
 
-# 2. Clinical diagnostic reasoning model (permanent slot 2)
+# 2. Clinical diagnostic reasoning & EHR models (permanent slot 2)
+# Option A: DeepSeek-R1 70B (Deep chain-of-thought clinical reasoning)
 ollama pull deepseek-r1:70b
-# Or for a lighter footprint:
-# ollama pull deepseek-r1:32b
+# Option B: Google MedGemma 27B (Google Health AI domain-native EHR synthesis)
+ollama pull medgemma:27b
 ```
 
-> **MSI EdgeXpert 13SUS via Tailscale:** With 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip, both models run permanently resident without swapping (`OLLAMA_MAX_LOADED_MODELS=2`). Set `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434` in your `.env`.
+> **MSI EdgeXpert 13SUS via Tailscale:** With 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip, multiple specialized models run permanently resident without swapping (`OLLAMA_MAX_LOADED_MODELS=2`). Set `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434` in your `.env`.
 
 ### 3. Setup Telegram Bot (Recommended)
 

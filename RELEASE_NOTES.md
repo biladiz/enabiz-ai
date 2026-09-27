@@ -9,12 +9,12 @@ The project adheres to Semantic Versioning and minor versions are incremented fo
 ## [Unreleased]
 
 ### Added
-- **MSI EdgeXpert 13SUS (NVIDIA GB10 128GB) Dual-Resident Architecture:**
-  - Added multi-model role slots in `AppConfig`: `model_clinical` (`deepseek-r1:70b`), `model_vision` (`qwen2.5-vl:14b`), and `model_extraction` (`qwen2.5:7b`).
-  - Updated `RAGEngine` default model to `deepseek-r1:70b` for deep clinical chain-of-thought reasoning across multi-year biomarker trends.
-  - Implemented defensive `<think>...</think>` token parsing in `RAGEngine`: diagnostic reasoning traces are captured for clinical logs, while clean summaries are delivered to Telegram.
-  - Documented dual-resident deployment architecture for 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=-1`).
-  - Added unit test `test_rag_engine_deepseek_r1_think_stripping` in `tests/test_services.py` (57 tests passing).
+- **MSI EdgeXpert 13SUS (NVIDIA GB10 128GB) Multi-Model Architecture:**
+  - Added multi-model role slots in `AppConfig`: `model_clinical` (`deepseek-r1:70b` / `medgemma:27b`), `model_vision` (`qwen2.5-vl:14b`), `model_radiology` (`medgemma:27b`), and `model_extraction` (`qwen2.5:7b`).
+  - Added first-class support for **Google MedGemma 27B** (HAI-DEF / Gemma 3, 87.7% MedQA) for fast, domain-native clinical EHR synthesis and planned medical imaging interpretation via MedSigLIP.
+  - Updated `RAGEngine` to support both `deepseek-r1:70b` (with defensive `<think>...</think>` token stripping) and `medgemma:27b`.
+  - Documented multi-model deployment architecture for 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=-1`).
+  - Added unit test `test_rag_engine_medgemma_model_support` in `tests/test_services.py` (58 tests passing).
 
 ---
 

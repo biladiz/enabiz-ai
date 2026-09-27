@@ -67,19 +67,23 @@ Distinct pipeline tasks are routed to specialized models configured in `src/enab
 - **Job A: Web Navigation, OCR & Document Extraction:**
   - **Assigned Model:** `qwen2.5-vl:14b` (`model_vision`)
   - **Role:** High-fidelity visual grounding of e-Devlet/e-Nabız UI elements, PDF lab report OCR, and complex TableFormer extraction.
-- **Job B: Clinical Diagnostic Reasoning & Longitudinal Trend Analysis:**
-  - **Assigned Model:** `deepseek-r1:70b` (`model_clinical` / `ollama_model`)
-  - **Role:** Deep biomedical chain-of-thought reasoning across multi-year biomarker trends, detecting subtle shifts in liver/kidney/lipid markers, and generating doctor consultation talking points.
-  - **`<think>` Token Stripping:** Implemented in `RAGEngine` to log diagnostic chain-of-thought defensively for audit while sending clean, patient-friendly summaries to Telegram.
-- **Job C: Lightweight Structured JSON Extraction (Fallback):**
+- **Job B: Clinical Diagnostic Reasoning & Longitudinal EHR Analysis:**
+  - **Assigned Models:**
+    - `deepseek-r1:70b` (`model_clinical` / `ollama_model`): Deep biomedical chain-of-thought reasoning across multi-year biomarker trends, detecting subtle shifts in liver/kidney/lipid markers, and generating doctor consultation talking points. `<think>` tokens stripped for patient Telegram summaries.
+    - `medgemma:27b` (Google Health AI / Gemma 3, 87.7% MedQA): Fast, domain-native clinical EHR evaluation with minimal hallucination risk and 1/10th the inference compute cost of larger models.
+- **Job C: Multimodal Medical Imaging & Radiology Interpretation (Planned):**
+  - **Assigned Model:** `medgemma:27b` / `medsiglip` (`model_radiology`)
+  - **Role:** Direct interpretation of e-Nabız radiology reports (Röntgen, MR, BT) and medical imaging studies alongside blood biomarkers.
+- **Job D: Lightweight Structured JSON Extraction (Fallback):**
   - **Assigned Model:** `qwen2.5:7b` (`model_extraction`) for rapid low-overhead JSON formatting from pre-parsed text.
 
 ### 3. Implementation Status & Next Steps
-- [x] Add specialized model role slots to `AppConfig` (`model_clinical`, `model_vision`, `model_extraction`).
-- [x] Update `RAGEngine` to default to `deepseek-r1:70b` and handle `<think>...</think>` block extraction and stripping.
-- [x] Add automated unit tests for DeepSeek-R1 `<think>` token filtering (`tests/test_services.py`).
+- [x] Add specialized model role slots to `AppConfig` (`model_clinical`, `model_vision`, `model_radiology`, `model_extraction`).
+- [x] Update `RAGEngine` to support `deepseek-r1:70b` (with `<think>` filtering) and `medgemma:27b`.
+- [x] Add automated unit tests for DeepSeek-R1 `<think>` token filtering and MedGemma 27B report generation (`tests/test_services.py`).
 - [ ] Measure token generation speeds (tok/s) and thermal headroom on the physical MSI EdgeXpert 13SUS hardware.
-- [ ] Benchmark `deepseek-r1:70b` vs `deepseek-r1:32b` for optimal speed-to-accuracy balance on Turkish clinical terminology.
+- [ ] Benchmark `deepseek-r1:70b` vs `medgemma:27b` for speed, accuracy, and Turkish clinical nuance.
+- [ ] Prototype e-Nabız radiology image/report ingestion using MedGemma 27B Multimodal and MedSigLIP.
 - [ ] Evaluate LiteLLM proxy deployment on the EdgeXpert for external API client access and health monitoring.
 
 ---
