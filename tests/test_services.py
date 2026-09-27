@@ -74,3 +74,22 @@ class TestServices:
         rag = RAGEngine(db=temp_db)
         report = await rag.generate_weekly_report(person_name="Ahmet")
         assert "Tahlil Değerlendirmesi" in report
+
+    @patch("httpx.AsyncClient.post")
+    async def test_rag_engine_deepseek_r1_think_stripping(self, mock_post, temp_db: HealthDatabase):
+        from unittest.mock import MagicMock
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": "<think>\nPatient has elevated liver transaminases. Ruling out acute hepatitis.\n</think>\nKlinik Sonuç: Karaciğer enzimlerinde hafif yükselme gözlenmiştir."
+            }
+        }
+        mock_post.return_value = mock_response
+
+        rag = RAGEngine(db=temp_db, model="deepseek-r1:70b")
+        report = await rag.generate_weekly_report(person_name="Ahmet")
+        assert "<think>" not in report
+        assert "</think>" not in report
+        assert "Ruling out acute hepatitis" not in report
+        assert "Klinik Sonuç: Karaciğer enzimlerinde hafif yükselme" in report

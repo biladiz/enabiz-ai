@@ -16,19 +16,19 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Your Machine (Windows dev) ──Tailscale──▶ MSI DGX Spark (prod)│
-│                                                                 │
-│  CLI ─▶ Orchestrator ─▶ Browser (Playwright)                    │
-│              │            ├──▶ e-Devlet Login (with 2FA Relay)  │
-│              │            └──▶ e-Nabız Direct (with/without 2FA)│
-│              │                       │           │              │
-│              │                       ▼           ▼              │
-│              │         e-Nabız Nav (LLM)    2FA ─▶ Telegram     │
-│              │              │                                   │
-│              ▼              ▼                                   │
-│         Docling (PDF) ─▶ SQLite DB ◀── LLM Extractor (Ollama)  │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  Your Machine (Windows dev) ──Tailscale──▶ MSI EdgeXpert 13SUS (prod)  │
+│                                            (NVIDIA GB10 128GB Unified) │
+│  CLI ─▶ Orchestrator ─▶ Browser (Playwright)                           │
+│              │            ├──▶ e-Devlet Login (with 2FA Relay)         │
+│              │            └──▶ e-Nabız Direct (with/without 2FA)       │
+│              │                       │           │                     │
+│              │                       ▼           ▼                     │
+│              │       e-Nabız Nav (Qwen2.5-VL) 2FA ─▶ Telegram          │
+│              │              │                                          │
+│              ▼              ▼                                          │
+│         Docling (PDF) ─▶ SQLite DB ◀── Clinical RAG (DeepSeek-R1 70B)  │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
@@ -37,12 +37,12 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 - **Dual-Method Authentication & Auto-Fallback** — Log in using e-Devlet or direct e-Nabız credentials; store both for automated fallback
 - **Flexible 2FA Support** — Telegram OTP relay or console fallback; supports 2FA-enabled and 2FA-exempt accounts
 - **Multi-Profile Isolation** — Separate encrypted credentials, health records, and storage sandboxes for each family member
-- **Local vision models** (qwen2.5-vl:14b via Ollama) for UI understanding
+- **Dual Specialized Local Models** — DeepSeek-R1 (70B/32B) for clinical diagnostic reasoning and Qwen2.5-VL (14B) for visual web navigation and OCR
 - **Hybrid browser automation** — Deterministic Playwright for login, LLM-driven for portal navigation
 - **Encrypted credentials** (Fernet + PBKDF2) — Passwords never exposed to LLM or stored in plain text
 - **PDF parsing** using IBM Docling with TableFormer for medical lab tables
 - **SQLite storage** with dedup, full-text search, and CSV export
-- **Cross-platform** — Develop on Windows, deploy on DGX Spark (ARM64 Ubuntu)
+- **Cross-platform** — Develop on Windows, deploy on MSI EdgeXpert 13SUS (NVIDIA GB10 128GB ARM64 Ubuntu)
 
 
 ## Quick Start
@@ -59,14 +59,19 @@ playwright install chromium
 
 ### 2. Setup Ollama
 
-Install [Ollama](https://ollama.com/) and pull the vision model:
+Install [Ollama](https://ollama.com/) and pull the specialized models:
 
 ```bash
+# 1. Vision navigation & OCR model (permanent slot 1)
 ollama pull qwen2.5-vl:14b
+
+# 2. Clinical diagnostic reasoning model (permanent slot 2)
+ollama pull deepseek-r1:70b
+# Or for a lighter footprint:
+# ollama pull deepseek-r1:32b
 ```
 
-> **DGX Spark via Tailscale:** If Ollama runs on your DGX Spark, set
-> `OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434` in your `.env`.
+> **MSI EdgeXpert 13SUS via Tailscale:** With 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip, both models run permanently resident without swapping (`OLLAMA_MAX_LOADED_MODELS=2`). Set `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434` in your `.env`.
 
 ### 3. Setup Telegram Bot (Recommended)
 

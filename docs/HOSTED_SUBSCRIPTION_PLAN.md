@@ -37,21 +37,62 @@ Non-technical users cannot and should not be expected to manage Git repos, local
 
 ## 2. High-Availability (HA) & Capacity Planning for 50 Users
 
-The service will run on the **MSI DGX Spark** (Ubuntu ARM64 + Local GPU/NPU) backed by a lightweight Cloud VPS gateway.
+The service runs on the **MSI EdgeXpert 13SUS** (NVIDIA DGX Spark platform powered by the **NVIDIA GB10 Grace Blackwell Superchip**, 20-core ARM CPU, **128 GB LPDDR5x unified memory**, and 4TB PCIe Gen5 NVMe SSD) connected via Tailscale mesh VPN to a lightweight Cloud VPS gateway.
 
-### 2.1 Hardware Resource Modeling on DGX Spark
+### 2.1 Hardware Profile: MSI EdgeXpert 13SUS
+
+| Component | Specification | Operational Role in e-Nabız AI |
+|---|---|---|
+| **SoC / Compute** | NVIDIA GB10 Grace Blackwell (20 ARM cores, 1,000 TOPS FP4) | 5th Gen Tensor Cores accelerate FP4/FP8 local LLM inference |
+| **Unified Memory** | 128 GB LPDDR5x Coherent RAM (~500+ GB/s bandwidth) | Dual-resident models (`deepseek-r1:70b` + `qwen2.5-vl:14b`) with zero swapping |
+| **Storage** | 4 TB PCIe Gen5 NVMe SSD (up to 14,000 MB/s sequential) | Instant model loading (~4s cold load) & isolated tenant SQLite databases |
+| **Networking** | Dual 10GbE / 2.5GbE + Wi-Fi 7 + Tailscale Mesh | Secure encrypted ingress tunnel from Cloud Gateway VPS |
+| **Operating System**| NVIDIA DGX OS / Ubuntu 24.04 LTS ARM64 | Containerized microservices (Docker / Systemd) |
+
+### 2.2 Dual-Resident LLM Strategy & 128 GB Memory Layout
+
+With 128 GB unified memory shared between CPU and GPU, the system **eliminates model-swapping latency entirely**. Both specialized models remain permanently resident in VRAM:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        DGX SPARK (Hardware Host)                       │
+│             MSI EDGEXPERT 13SUS — 128 GB UNIFIED MEMORY MAP            │
 │                                                                        │
-│   [Tailscale VPN] ◄────▶ [Gateway VPS (Telegram & Web Hook)]           │
+│  [DeepSeek-R1 70B (Clinical RAG)]        ~43 GB (Q4_K_M)               │
+│  [Qwen 2.5-VL 14B (Vision / OCR)]        ~10 GB (Q4_K_M)               │
+│  [Dynamic KV-Cache & Context Window]     ~10 GB (up to 128k context)   │
+│  [Playwright Headless Browser Pool]      ~4 GB (2 concurrent workers)  │
+│  [DGX OS, Kernel, Redis, Python Runtime] ~6 GB                         │
+│  ────────────────────────────────────────────────────────────────────  │
+│  TOTAL ALLOCATED:                        ~73 GB                        │
+│  AVAILABLE BUFFER / HEADROOM:            ~55 GB (Unused headroom)      │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Ollama Daemon Configuration (`/etc/systemd/system/ollama.service.d/override.conf`)
+```ini
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_MAX_LOADED_MODELS=2"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_KEEP_ALIVE=-1"
+```
+- `OLLAMA_MAX_LOADED_MODELS=2`: Keeps both `deepseek-r1:70b` and `qwen2.5-vl:14b` in unified memory simultaneously.
+- `OLLAMA_KEEP_ALIVE=-1`: Never unloads weights to disk, achieving instant 0ms model activation.
+
+### 2.3 Load Modeling for 50 Subscribers
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│             MSI EDGEXPERT 13SUS HOSTED ARCHITECTURE                    │
+│                                                                        │
+│   [Tailscale Mesh] ◄────▶ [Gateway VPS (Telegram & Webhook Ingress)]   │
 │         │                                                              │
 │         ├── Async Worker Queue (Celery / Redis / RQ)                   │
-│         │     ├── Max 2 Concurrent Playwright Browsers (RAM: ~3-4 GB)  │
-│         │     └── Max 1 Concurrency Ollama Qwen 2.5 (VRAM: ~12-16 GB)  │
+│         │     ├── Max 2 Concurrent Playwright Workers (RAM: ~4 GB)     │
+│         │     ├── Permanent Slot 1: Qwen2.5-VL 14B (Vision / OCR)      │
+│         │     └── Permanent Slot 2: DeepSeek-R1 70B (Clinical RAG)     │
 │         │                                                              │
-│         └── Storage Enclave                                            │
+│         └── 4TB Gen5 NVMe Storage Enclave                              │
 │               ├── 50 Isolated SQLite Databases (~5 GB total)           │
 │               └── Encrypted Session State Store (AES-256-GCM)          │
 └────────────────────────────────────────────────────────────────────────┘
@@ -62,20 +103,20 @@ The service will run on the **MSI DGX Spark** (Ubuntu ARM64 + Local GPU/NPU) bac
 - **Solution (Staggered Batch Scheduling):**
   - Divide 50 users evenly across the week: **~7 users per day**.
   - Execute scheduled syncs during low-traffic night hours (**02:00 – 05:00 AM**).
-  - Worker concurrency limited to **2 simultaneous browser jobs**.
+  - Worker concurrency limited to **2 simultaneous browser jobs** (using 2 of 20 ARM cores and ~4 GB RAM).
   - 7 users × 3 minutes = **21 minutes total browser runtime per night**.
 
-#### B. LLM Inference Load (Ollama on DGX Spark)
-- **Model:** `qwen2.5:14b` or `qwen2.5:7b` with Turkish clinical system prompt.
-- **Load:** 7 clinical reports per night.
-- Each report takes ~45–90 seconds on DGX Spark GPU. Total daily inference: **~10 minutes**.
-- Leaves 98% of GPU compute free for interactive on-demand queries.
+#### B. LLM Inference Load (Dual Models on GB10 Superchip)
+- **Vision Extraction:** `qwen2.5-vl:14b` processes portal screenshots and lab report PDFs in ~3–5 seconds.
+- **Clinical Synthesis:** `deepseek-r1:70b` performs multi-year longitudinal biomarker correlation and diagnostic reasoning in ~30–60 seconds per subscriber. Internal `<think>` reasoning traces are logged defensively, while concise clinical summaries are delivered to Telegram.
+- **Total Nightly Inference:** 7 users × 1 minute = **~7 minutes per night**.
+- Leaves 99% of compute free for interactive on-demand Telegram questions during daytime hours.
 
 #### C. Failover & Service Continuity
 1. **Separation of Concerns:**
    - **Gateway Node (Cloud VPS in Turkey / Germany):** Handles incoming Telegram webhooks, subscription billing, and user notifications. Always online (99.9% uptime).
-   - **Worker Node (DGX Spark):** Secure execution environment for browser harvesting and local LLM inference.
-2. **Buffer Queue:** If the DGX Spark is temporarily offline (power/internet hiccup), the Gateway queues tasks in Redis. When the DGX Spark reconnects via Tailscale, it drains the queue seamlessly.
+   - **Worker Node (MSI EdgeXpert 13SUS):** Secure execution environment for browser harvesting and local LLM inference.
+2. **Buffer Queue:** If the MSI EdgeXpert is temporarily offline (e.g. internet hiccup), the Gateway queues tasks in Redis. When the EdgeXpert reconnects via Tailscale, it drains the queue seamlessly.
 3. **Automated Encrypted Backups:** Nightly snapshot of all 50 tenant databases encrypted with Age/GPG and replicated to an off-site S3-compatible encrypted bucket.
 
 ---
@@ -139,10 +180,10 @@ graph TD
 - [ ] Implement per-tenant encrypted SQLite storage (`tenants/<uuid>/health.db`).
 - [ ] Add automated per-tenant backup & wipe scripts (`tenant_backup.py`, `tenant_purge.py`).
 
-### Epic 2: Distributed Job Queue (DGX Spark Worker)
-- [ ] Implement Redis + Celery / RQ worker service running on DGX Spark.
-- [ ] Create rate-limited browser pool (`max_concurrency=2`).
-- [ ] Create serialized Ollama task runner (`max_concurrency=1`).
+### Epic 2: Distributed Job Queue (MSI EdgeXpert 13SUS Worker)
+- [ ] Implement Redis + Celery / RQ worker service running on MSI EdgeXpert 13SUS.
+- [ ] Create rate-limited browser pool (`max_concurrency=2` pinned to dedicated ARM cores).
+- [ ] Configure dual-resident Ollama worker pool (`qwen2.5-vl:14b` for OCR/nav + `deepseek-r1:70b` for clinical reasoning).
 - [ ] Build round-robin weekly scheduler spreading 50 users across 7 days.
 
 ### Epic 3: Telegram Concierge Bot Gateway

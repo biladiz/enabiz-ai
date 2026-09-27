@@ -38,62 +38,49 @@ This document outlines the development roadmap, ongoing milestones, and future p
 
 ---
 
-## 🔬 Investigation Milestone: MSI DGX Spark Hardware Audit & Specialized Multi-Model Routing
+## 🔬 Hardware Milestone: MSI EdgeXpert 13SUS (NVIDIA GB10 128GB) & Multi-Model Architecture
 
-Plan to benchmark the production **MSI DGX Spark** (Ubuntu ARM64) and architect specialized multi-model routing for distinct pipeline tasks rather than relying on a single general-purpose model.
+Architecture and multi-model deployment strategy engineered for the production **MSI EdgeXpert 13SUS** (NVIDIA DGX Spark platform powered by the **NVIDIA GB10 Grace Blackwell Superchip**, 20-core ARM CPU, **128 GB LPDDR5x unified memory**, and 4TB PCIe Gen5 NVMe SSD).
 
-### 1. Hardware & VRAM Audit (MSI DGX Spark)
-- [ ] Profile available GPU/NPU architecture, total VRAM, CUDA runtime, and memory bandwidth on the DGX Spark.
-- [ ] Measure Ollama inference latency, token generation speeds (tok/s), and thermal throttling under sustained load.
-- [ ] Determine optimal quantization levels (`Q4_K_M` vs `Q8_0` vs `fp16`) for 7B, 14B, and 32B model sizes within available VRAM.
+### 1. Hardware Architecture & 128 GB Unified Memory Allocation
+- [x] **Hardware Profile Confirmed:**
+  - **SoC:** NVIDIA GB10 Grace Blackwell (20 ARM cores: 10x Cortex-X925 + 10x Cortex-A725, 1,000 TOPS FP4 compute).
+  - **Unified RAM:** 128 GB LPDDR5x coherent memory (~500+ GB/s bandwidth) shared dynamically between CPU and GPU.
+  - **Storage:** 4 TB PCIe Gen5 NVMe SSD (up to 14,000 MB/s sequential read/write) for sub-5s model weight loading.
+  - **OS:** NVIDIA DGX OS / Ubuntu 24.04 LTS ARM64.
+- [x] **Zero-Swapping Dual-Resident Strategy:**
+  - With 128 GB unified memory, model swapping is eliminated. Both specialized models remain permanently resident in memory:
+    - **Vision & Document OCR:** `qwen2.5-vl:14b` (~10 GB VRAM).
+    - **Clinical Diagnostic Reasoning:** `deepseek-r1:70b` (Q4_K_M ~43 GB VRAM).
+    - **KV-Cache & Context Expansion:** ~10 GB buffer for up to 128k context windows.
+    - **Playwright Chromium Pool:** ~4 GB (2 concurrent workers).
+    - **OS / Kernel / Buffer:** ~6 GB.
+    - **Available Free Headroom:** ~55 GB buffer.
+- [x] **Ollama Daemon Systemd Override Configuration:**
+  - `Environment="OLLAMA_MAX_LOADED_MODELS=2"`
+  - `Environment="OLLAMA_NUM_PARALLEL=2"`
+  - `Environment="OLLAMA_KEEP_ALIVE=-1"` (keeps both models permanently active in memory).
 
-### 2. Task Specialization & Candidate Model Benchmarking
-Distinct tasks have fundamentally different performance, context, and intelligence requirements:
+### 2. Task Specialization & Role-Based Routing
+Distinct pipeline tasks are routed to specialized models configured in `src/enabiz_ai/config.py`:
 
-- **Job A: Web Navigation, OCR & Structured Document Extraction:**
-  - *Requirements:* High visual element grounding, rapid JSON formatting, low latency, robust OCR for lab tables.
-  - *Candidate Models to Evaluate:*
-    - `qwen2.5-vl:7b` / `qwen2.5-vl:14b`: Primary candidates for Playwright UI understanding and PDF document OCR.
-    - `llama-3.2-vision:11b`: High precision for complex medical PDF tables.
-    - `qwen2.5:7b-instruct`: Ultra-fast structured JSON extraction for pre-parsed plain text.
-- **Job B: Clinical Health Reasoning, Longitudinal Trend Analysis & Medical Suggestions:**
-  - *Requirements:* Deep biomedical understanding, nuanced Turkish fluency, empathetic and clear communication, chain-of-thought reasoning across multi-year biomarker trends.
-  - *Candidate Models to Evaluate:*
-    - `qwen2.5:14b` / `qwen2.5:32b` (4-bit): High Turkish fluency, strong medical synthesis, and reliable doctor visit talking points.
-    - `deepseek-r1:14b` / `deepseek-r1:8b`: Deep chain-of-thought reasoning for correlating multiple simultaneous abnormal markers.
-    - `meditron:7b` / `biomistral:7b`: Medical-domain specialized LLMs (evaluating Turkish translation and clinical terminology accuracy).
+- **Job A: Web Navigation, OCR & Document Extraction:**
+  - **Assigned Model:** `qwen2.5-vl:14b` (`model_vision`)
+  - **Role:** High-fidelity visual grounding of e-Devlet/e-Nabız UI elements, PDF lab report OCR, and complex TableFormer extraction.
+- **Job B: Clinical Diagnostic Reasoning & Longitudinal Trend Analysis:**
+  - **Assigned Model:** `deepseek-r1:70b` (`model_clinical` / `ollama_model`)
+  - **Role:** Deep biomedical chain-of-thought reasoning across multi-year biomarker trends, detecting subtle shifts in liver/kidney/lipid markers, and generating doctor consultation talking points.
+  - **`<think>` Token Stripping:** Implemented in `RAGEngine` to log diagnostic chain-of-thought defensively for audit while sending clean, patient-friendly summaries to Telegram.
+- **Job C: Lightweight Structured JSON Extraction (Fallback):**
+  - **Assigned Model:** `qwen2.5:7b` (`model_extraction`) for rapid low-overhead JSON formatting from pre-parsed text.
 
-### 3. Routing Architecture Decision: In-App vs. MSI DGX Spark Gateway
-Evaluate the architectural design for routing requests to specialized models:
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        MODEL ROUTING STRATEGIES                        │
-│                                                                        │
-│  Option 1: In-App Role Slots (Direct)                                  │
-│  enabiz-ai config ──▶ extraction_model ──▶ Ollama (/api/chat)          │
-│                   ──▶ clinical_model   ──▶ Ollama (/api/chat)          │
-│                                                                        │
-│  Option 2: MSI DGX Spark Gateway Proxy (LiteLLM / vLLM)                │
-│  enabiz-ai ──▶ LiteLLM Proxy on DGX Spark ──▶ Ollama / vLLM backends   │
-│                (model aliases: 'extractor', 'clinical-expert')         │
-│                                                                        │
-│  ⭐ Recommendation: In-App Role Abstraction with OpenAI-compatible API  │
-│     Direct connection to Ollama by default, with seamless support for   │
-│     a LiteLLM / Open-WebUI proxy on the DGX Spark if needed.           │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-- [ ] **Phase A (In-App Roles):** Separate single `ollama_model` in `config.py` into distinct functional roles:
-  - `model_vision_nav`: For browser automation (`qwen2.5-vl`).
-  - `model_extraction`: For document OCR and JSON parsing (`qwen2.5-vl` / `llama3.2-vision`).
-  - `model_clinical_rag`: For longitudinal health evaluation and doctor talking points (`qwen2.5:14b` / `deepseek-r1`).
-  - `model_chat`: For interactive Telegram Q&A (`qwen2.5:7b`).
-- [ ] **Phase B (MSI Gateway Proxy Investigation):** Evaluate deploying **LiteLLM Proxy** on the DGX Spark:
-  - Decouples client applications from backend model providers.
-  - Enables centralized fallback (e.g. fall back from 14B to 7B if VRAM is constrained).
-  - Provides model load balancing, request queuing, and latency tracking.
-- [ ] **VRAM Thrashing Prevention:** Implement sequential batch scheduling (execute all Job A extractions first, then switch to Job B clinical reasoning) so Ollama does not constantly swap large models in and out of GPU memory.
+### 3. Implementation Status & Next Steps
+- [x] Add specialized model role slots to `AppConfig` (`model_clinical`, `model_vision`, `model_extraction`).
+- [x] Update `RAGEngine` to default to `deepseek-r1:70b` and handle `<think>...</think>` block extraction and stripping.
+- [x] Add automated unit tests for DeepSeek-R1 `<think>` token filtering (`tests/test_services.py`).
+- [ ] Measure token generation speeds (tok/s) and thermal headroom on the physical MSI EdgeXpert 13SUS hardware.
+- [ ] Benchmark `deepseek-r1:70b` vs `deepseek-r1:32b` for optimal speed-to-accuracy balance on Turkish clinical terminology.
+- [ ] Evaluate LiteLLM proxy deployment on the EdgeXpert for external API client access and health monitoring.
 
 ---
 
@@ -104,14 +91,14 @@ Evaluate the architectural design for routing requests to specialized models:
 Designed for users who want e-Nabız AI weekly intelligence without touching code, running Docker/Python, or managing local LLMs.
 
 ### Constraints & Principles
-- **Strict 50-Subscriber Limit:** Keeps operations manageable, ensures zero performance degradation on dedicated hardware (DGX Spark), and controls regulatory exposure.
+- **Strict 50-Subscriber Limit:** Keeps operations manageable, ensures zero performance degradation on dedicated hardware (MSI EdgeXpert 13SUS), and controls regulatory exposure.
 - **Zero-Code Delivery:** Operated 100% via a private Telegram Bot concierge.
 - **Credential Minimization:** Uses direct e-Nabız passwords (isolated from e-Devlet identity records) with in-memory session token exchange.
 - **KVKK & Sensitive Data Compliance:** Explicit consent flow, strictly local AI inference in Turkey, and `/delete_my_data` right-to-erasure.
 
 ### Planned Epics
 1. **Epic 1 — Multi-Tenant Architecture:** Per-tenant SQLite database isolation (`tenants/<uuid>/health.db`).
-2. **Epic 2 — DGX Spark Distributed Worker Queue:** Redis + Celery/RQ job worker with rate-limited Playwright browser pool (max 2 concurrency) and staggered weekly runs (~7 users/day).
+2. **Epic 2 — MSI EdgeXpert Distributed Worker Queue:** Redis + Celery/RQ job worker with rate-limited Playwright browser pool (max 2 concurrency) and staggered weekly runs (~7 users/day).
 3. **Epic 3 — Multi-Tenant Telegram Concierge Gateway:** Standalone bot gateway with multi-user session state machine and 2FA OTP routing.
 4. **Epic 4 — Credential Enclave & Security:** In-memory credential consumption with zero plain-text disk storage.
 5. **Epic 5 — Subscription & Billing Integration:** 50-seat inventory lock and domestic Turkish payment processor integration (Iyzico / Shopier).

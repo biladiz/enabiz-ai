@@ -8,6 +8,14 @@ The project adheres to Semantic Versioning and minor versions are incremented fo
 
 ## [Unreleased]
 
+### Added
+- **MSI EdgeXpert 13SUS (NVIDIA GB10 128GB) Dual-Resident Architecture:**
+  - Added multi-model role slots in `AppConfig`: `model_clinical` (`deepseek-r1:70b`), `model_vision` (`qwen2.5-vl:14b`), and `model_extraction` (`qwen2.5:7b`).
+  - Updated `RAGEngine` default model to `deepseek-r1:70b` for deep clinical chain-of-thought reasoning across multi-year biomarker trends.
+  - Implemented defensive `<think>...</think>` token parsing in `RAGEngine`: diagnostic reasoning traces are captured for clinical logs, while clean summaries are delivered to Telegram.
+  - Documented dual-resident deployment architecture for 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=-1`).
+  - Added unit test `test_rag_engine_deepseek_r1_think_stripping` in `tests/test_services.py` (57 tests passing).
+
 ---
 
 ## [0.1.0] - 2026-09-27

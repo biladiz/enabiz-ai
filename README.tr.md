@@ -16,19 +16,19 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 ## Mimari
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Kendi Cihazınız (Windows dev) ──Tailscale──▶ MSI DGX Spark     │
-│                                                                 │
-│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright)                    │
-│              │            ├──▶ e-Devlet Girişi (2FA İletimi)    │
-│              │            └──▶ Doğrudan e-Nabız (2FA'lı/2FA'sız)│
-│              │                       │           │              │
-│              │                       ▼           ▼              │
-│              │       e-Nabız Gezinme (LLM)   2FA ─▶ Telegram    │
-│              │              │                                   │
-│              ▼              ▼                                   │
-│         Docling (PDF) ─▶ SQLite DB ◀── LLM Çıkarıcı (Ollama)    │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  Kendi Cihazınız (Windows dev) ──Tailscale──▶ MSI EdgeXpert 13SUS      │
+│                                            (NVIDIA GB10 128GB Unified) │
+│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright)                           │
+│              │            ├──▶ e-Devlet Girişi (2FA İletimi)           │
+│              │            └──▶ Doğrudan e-Nabız (2FA'lı/2FA'sız)       │
+│              │                       │           │                     │
+│              │                       ▼           ▼                     │
+│              │       e-Nabız Gezinme (Qwen2.5) 2FA ─▶ Telegram         │
+│              │              │                                          │
+│              ▼              ▼                                          │
+│         Docling (PDF) ─▶ SQLite DB ◀── Klinik RAG (DeepSeek-R1 70B)    │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Özellikler
@@ -37,12 +37,12 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 - **Çift Giriş Yöntemi ve Otomatik Yedekleme** — e-Devlet veya doğrudan e-Nabız şifresi ile giriş; birincil yöntem başarısız olursa ikincisine otomatik geçiş
 - **Esnek 2FA Desteği** — Telegram Bot ile SMS onay iletimi veya konsol yedeği; 2FA'lı ve 2FA'sız hesaplar desteklenir
 - **Çoklu Profil Yalıtımı** — Her aile bireyi için izole şifreli kimlikler, sağlık kayıtları ve dosya dizinleri
-- **Yerel görsel modeller** (Arayüz analizi için Ollama üzerinden `qwen2.5-vl:14b`)
+- **İkili Uzmanlaşmış Yerel Model Stratejisi** — Derin klinik teşhis ve uzun dönemli analiz için DeepSeek-R1 (70B/32B), görsel arayüz ve OCR için Qwen2.5-VL (14B)
 - **Hibrit tarayıcı otomasyonu** — Giriş işlemleri için kararlı Playwright, portal içi gezinme için LLM destekli gezgin
 - **Şifreli kimlik saklama** (Fernet + PBKDF2) — Parola asla LLM'e veya açık metin olarak diske aktarılmaz
 - **PDF ayrıştırma** — Tıbbi laboratuvar tabloları için TableFormer destekli IBM Docling entegrasyonu
 - **SQLite veri depolama** — Mükerrer kayıt engelleme (deduplication), tam metin arama ve CSV dışa aktarımı
-- **Platform bağımsız** — Windows üzerinde geliştirme, DGX Spark (ARM64 Ubuntu) üzerinde üretim dağıtımı
+- **Platform bağımsız** — Windows üzerinde geliştirme, MSI EdgeXpert 13SUS (NVIDIA GB10 128GB ARM64 Ubuntu) üzerinde üretim dağıtımı
 
 
 ## Hızlı Başlangıç
@@ -59,14 +59,19 @@ playwright install chromium
 
 ### 2. Ollama Kurulumu
 
-[Ollama](https://ollama.com/) yazılımını yükleyin ve görsel modeli indirin:
+[Ollama](https://ollama.com/) yazılımını yükleyin ve uzmanlaşmış modelleri indirin:
 
 ```bash
+# 1. Görsel gezinme ve OCR modeli (kalıcı yuva 1)
 ollama pull qwen2.5-vl:14b
+
+# 2. Klinik teşhis ve akıl yürütme modeli (kalıcı yuva 2)
+ollama pull deepseek-r1:70b
+# veya daha hafif bellek kullanımı için:
+# ollama pull deepseek-r1:32b
 ```
 
-> **Tailscale ile DGX Spark Kullanımı:** Ollama DGX Spark üzerinde çalışıyorsa `.env` dosyanızda şu şekilde tanımlayın:
-> `OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434`
+> **Tailscale ile MSI EdgeXpert 13SUS Kullanımı:** NVIDIA GB10 Grace Blackwell Superchip üzerindeki 128 GB birleşik bellek ile her iki model de belleğe kalıcı olarak yerleşir ve model takas gecikmesi yaşanmaz (`OLLAMA_MAX_LOADED_MODELS=2`). `.env` dosyanızda şu şekilde tanımlayın: `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434`
 
 ### 3. Telegram Bot Kurulumu (Önerilen)
 

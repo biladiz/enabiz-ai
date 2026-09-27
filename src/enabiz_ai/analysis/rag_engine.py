@@ -48,7 +48,7 @@ class RAGEngine:
         self,
         db: HealthRepository | HealthDatabase,
         ollama_base_url: str = "http://localhost:11434",
-        model: str = "qwen2.5:7b",
+        model: str = "deepseek-r1:70b",
         timeout: float = 180.0,
     ) -> None:
         self.db = db
@@ -166,7 +166,18 @@ class RAGEngine:
             response = await client.post(f"{self.ollama_base_url}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
-            report_text = data.get("message", {}).get("content", "").strip()
+            raw_content = data.get("message", {}).get("content", "").strip()
+
+        # Handle DeepSeek-R1 <think> chain-of-thought block if present
+        if "<think>" in raw_content and "</think>" in raw_content:
+            parts = raw_content.split("</think>", 1)
+            reasoning = parts[0].replace("<think>", "").strip()
+            report_text = parts[1].strip()
+            logger.info("DeepSeek-R1 diagnostic reasoning captured (%d characters)", len(reasoning))
+        elif "</think>" in raw_content:
+            report_text = raw_content.split("</think>", 1)[1].strip()
+        else:
+            report_text = raw_content
 
         return report_text
 
