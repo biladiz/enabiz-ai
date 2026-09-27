@@ -137,6 +137,10 @@ enabiz-ai query labs                    # List all lab reports
 enabiz-ai query labs --since 2024-01-01 # Filter by date
 enabiz-ai query labs -s "hemoglobin"    # Search
 
+# Natural Language Health Q&A (Clinical AI)
+enabiz-ai ask "Son açlık kan şekerim ve geçmiş yıllara göre değişimi nedir?" --profile default
+enabiz-ai ask "Hangi tansiyon ilaçlarını kullanıyorum?" --profile anne --model medgemma:27b
+
 # Export data
 enabiz-ai export csv --table lab_tests -o results.csv
 
@@ -146,13 +150,13 @@ enabiz-ai version
 ```
 
 
-## DGX Spark Deployment via Tailscale
+## MSI EdgeXpert 13SUS Deployment via Tailscale
 
-For production use on your MSI DGX Spark:
+For production execution on your MSI EdgeXpert 13SUS (NVIDIA GB10 128GB Unified Memory):
 
 1. **Install Tailscale** on both machines:
    ```bash
-   # On DGX Spark (Ubuntu ARM64)
+   # On MSI EdgeXpert (Ubuntu 24.04 LTS ARM64)
    curl -fsSL https://tailscale.com/install.sh | sh
    tailscale up
 
@@ -160,15 +164,15 @@ For production use on your MSI DGX Spark:
    # Install from https://tailscale.com/download/windows
    ```
 
-2. **Point Ollama to DGX Spark** (in `.env`):
+2. **Point Ollama to MSI EdgeXpert** (in `.env` on dev machine):
    ```env
-   OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434
+   OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434
    ```
 
-3. **Or run everything on DGX Spark**:
+3. **Or run the entire pipeline directly on MSI EdgeXpert**:
    ```bash
-   # SSH into DGX Spark via Tailscale
-   ssh user@<dgx-spark-tailscale-ip>
+   # SSH into MSI EdgeXpert via Tailscale
+   ssh user@<edgexpert-tailscale-ip>
 
    # Clone repo, install, and run
    git clone <repo> && cd enabiz-ai
@@ -197,6 +201,7 @@ The test suite covers:
 - **Turkish Date Parsing & Lab Abnormality Evaluator** (`test_extraction.py`)
 - **PowerShell Injection Sanitization & HTML Output Escaping** (`test_security.py`)
 - **Clinical RAG Engine & Multi-Profile Batching** (`test_services.py`)
+- **Authenticator Strategy Selection & Fallback** (`test_authenticator.py`)
 - **Typer CLI Runner Operations** (`test_cli.py`)
 
 ## Project Structure

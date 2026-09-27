@@ -187,6 +187,62 @@ class RAGEngine:
         retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
         reraise=True,
     )
+    async def ask_question(
+        self,
+        question: str,
+        person_name: str = "Genel",
+    ) -> str:
+        """Answer a natural language health question based on patient's records."""
+        context = await self.build_patient_context()
+
+        system_prompt = (
+            "Sen e-Nabız AI klinik asistanısın. Sana sunulan hastanın tıbbi geçmişi, laboratuvar tahlilleri, "
+            "reçeteleri ve doktor teşhislerine dayanarak kullanıcının sorusunu doğrudan, tıbbi açıdan doğru, "
+            "anlaşılır ve şık bir Türkçe ile yanıtla. Tahlil değerlerini tarihleriyle birlikte karşılaştır. "
+            "Önemli Kural: Tıbbi teşhis yerine geçmediğini, bunun bir AI destekli bilgilendirme olduğunu ve "
+            "kesin kararların takip eden hekime ait olduğunu nazikçe belirt."
+        )
+
+        user_prompt = f"{context}\n\n## KULLANICININ SORUSU ({person_name}):\n{question}\n\nLütfen hastanın verilerine dayanarak soruyu detaylı ve anlaşılır şekilde yanıtla:"
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": 16384,
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.ollama_base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
+            raw_content = data.get("message", {}).get("content", "").strip()
+
+        # Handle DeepSeek-R1 <think> chain-of-thought block if present
+        if "<think>" in raw_content and "</think>" in raw_content:
+            parts = raw_content.split("</think>", 1)
+            reasoning = parts[0].replace("<think>", "").strip()
+            answer_text = parts[1].strip()
+            logger.info("DeepSeek-R1 Q&A reasoning captured (%d characters)", len(reasoning))
+        elif "</think>" in raw_content:
+            answer_text = raw_content.split("</think>", 1)[1].strip()
+        else:
+            answer_text = raw_content
+
+        return answer_text
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
+        reraise=True,
+    )
     async def send_to_telegram(self, report_text: str, bot_token: str, chat_id: str, person_name: str = "Genel") -> bool:
         """Send formatted report chunks to user's Telegram."""
         if not bot_token or not chat_id:

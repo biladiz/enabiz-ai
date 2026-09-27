@@ -14,7 +14,11 @@ The project adheres to Semantic Versioning and minor versions are incremented fo
   - Added first-class support for **Google MedGemma 27B** (HAI-DEF / Gemma 3, 87.7% MedQA) for fast, domain-native clinical EHR synthesis and planned medical imaging interpretation via MedSigLIP.
   - Updated `RAGEngine` to support both `deepseek-r1:70b` (with defensive `<think>...</think>` token stripping) and `medgemma:27b`.
   - Documented multi-model deployment architecture for 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=-1`).
-  - Added unit test `test_rag_engine_medgemma_model_support` in `tests/test_services.py` (58 tests passing).
+- **Natural Language Health Q&A (`enabiz-ai ask` & `RAGEngine.ask_question`):**
+  - Added `ask_question()` method in `RAGEngine` to answer patient questions based on structured historical lab values, prescriptions, and visits.
+  - Added CLI command `enabiz-ai ask "question" --profile <id> [--model <model>]`.
+- **Authenticator Strategy & Fallback Test Suite:**
+  - Added comprehensive mock unit test suite in `tests/test_authenticator.py` covering e-Devlet primary, e-Nabız direct, and automated fallback on failure (68 total tests passing).
 
 ---
 

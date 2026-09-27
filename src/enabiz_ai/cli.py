@@ -374,7 +374,7 @@ def analyze(
     profile: str = typer.Option("default", "--profile", "-p", help="Profil ID ('default', 'anne', 'all')"),
     notify: bool = typer.Option(True, "--notify/--no-notify", help="Telegram'a gönder"),
 ):
-    """🧠 Generate RAG clinical evaluation using DGX Spark LLM."""
+    """🧠 Generate RAG clinical evaluation using MSI EdgeXpert LLM (DeepSeek-R1 / MedGemma)."""
     config = AppConfig()
     _setup_logging(config.log_level)
     pm = ProfileManager(config.data_dir)
@@ -398,6 +398,47 @@ def analyze(
                 console.print(f"[red]✗ [{p.display_name}] analizi sırasında hata oluştu: {e}[/red]\n")
 
     _run_async(_analyze())
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="Sağlık geçmişiniz veya tahlilleriniz hakkında soru"),
+    profile: str = typer.Option("default", "--profile", "-p", help="Profil ID ('default', 'anne', vb.)"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Kullanılacak model ('deepseek-r1:70b', 'medgemma:27b')"),
+):
+    """💬 Soru-Cevap: Kişisel sağlık kayıtlarınız hakkında doğal dilde soru sorun."""
+    config = AppConfig()
+    _setup_logging(config.log_level)
+    pm = ProfileManager(config.data_dir)
+    p = pm.get_profile(profile)
+    if not p:
+        console.print(f"[red]✗ Profil bulunamadı: {profile}[/red]")
+        raise typer.Exit(1)
+
+    db_path = pm.get_db_path(p.id)
+    if not db_path.exists():
+        console.print(f"[yellow]⚠️ {p.display_name} için veritabanı bulunamadı. Lütfen önce veri çekin: enabiz-ai sync --profile {p.id}[/yellow]")
+        raise typer.Exit(1)
+
+    selected_model = model or config.model_clinical or config.ollama_model
+
+    async def _ask():
+        console.print(f"[bold cyan]💬 [{p.display_name}] Soru yanıtlanıyor ({selected_model})...[/bold cyan]")
+        console.print(f"[dim]Soru: {question}[/dim]\n")
+        db = HealthDatabase(db_path)
+        async with db:
+            rag = RAGEngine(
+                db=db,
+                ollama_base_url=config.ollama_base_url,
+                model=selected_model,
+            )
+            try:
+                answer = await rag.ask_question(question=question, person_name=p.display_name)
+                console.print(Panel(answer, title=f"🩺 Klinik Yanıt: {p.display_name}", border_style="cyan"))
+            except Exception as e:
+                console.print(f"[red]✗ Soru yanıtlanırken hata oluştu: {e}[/red]")
+
+    _run_async(_ask())
 
 
 @app.command()

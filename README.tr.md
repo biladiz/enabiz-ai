@@ -137,6 +137,10 @@ enabiz-ai query labs                    # Tüm tahlil raporlarını listele
 enabiz-ai query labs --since 2024-01-01 # Tarihe göre filtrele
 enabiz-ai query labs -s "hemoglobin"    # Test adına göre ara
 
+# Doğal Dilde Sağlık Soru-Cevabı (Klinik Yapay Zeka)
+enabiz-ai ask "Son açlık kan şekerim ve geçmiş yıllara göre değişimi nedir?" --profile default
+enabiz-ai ask "Hangi tansiyon ilaçlarını kullanıyorum?" --profile anne --model medgemma:27b
+
 # Verileri dışa aktarma
 enabiz-ai export csv --table lab_tests -o sonuclar.csv
 
@@ -146,13 +150,13 @@ enabiz-ai version
 ```
 
 
-## Tailscale Üzerinden DGX Spark Dağıtımı
+## Tailscale Üzerinden MSI EdgeXpert 13SUS Dağıtımı
 
-Üretim ortamında MSI DGX Spark üzerinde çalıştırmak için:
+Üretim ortamında MSI EdgeXpert 13SUS (NVIDIA GB10 128GB Birleşik Bellek) üzerinde çalıştırmak için:
 
 1. **Her iki makineye de Tailscale kurun**:
    ```bash
-   # DGX Spark üzerinde (Ubuntu ARM64)
+   # MSI EdgeXpert üzerinde (Ubuntu 24.04 LTS ARM64)
    curl -fsSL https://tailscale.com/install.sh | sh
    tailscale up
 
@@ -160,15 +164,15 @@ enabiz-ai version
    # https://tailscale.com/download/windows adresinden kurun
    ```
 
-2. **Ollama'yı DGX Spark'a yönlendirin** (`.env` içinde):
+2. **Ollama'yı MSI EdgeXpert'e yönlendirin** (`.env` içinde):
    ```env
-   OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434
+   OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434
    ```
 
-3. **Veya tüm sistemi doğrudan DGX Spark üzerinde çalıştırın**:
+3. **Veya tüm sistemi doğrudan MSI EdgeXpert üzerinde çalıştırın**:
    ```bash
-   # Tailscale ile DGX Spark'a bağlanın
-   ssh user@<dgx-spark-tailscale-ip>
+   # Tailscale ile MSI EdgeXpert'e bağlanın
+   ssh user@<edgexpert-tailscale-ip>
 
    # Depoyu klonlayıp kurun
    git clone <repo> && cd enabiz-ai
@@ -197,6 +201,7 @@ Test kapsamı:
 - **Türkçe Tarih Ayrıştırma ve Tahlil Referans Aralığı Değerlendirici** (`test_extraction.py`)
 - **PowerShell Enjeksiyon Temizleme ve HTML Çıktı Güvenliği** (`test_security.py`)
 - **Klinik RAG Motoru ve Çoklu Profil Toplu İşleme** (`test_services.py`)
+- **Kimlik Doğrulama Strateji Seçimi ve Yedekleme (Fallback)** (`test_authenticator.py`)
 - **Typer CLI Komut Satırı İşlemleri** (`test_cli.py`)
 
 ## Proje Yapısı

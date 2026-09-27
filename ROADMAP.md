@@ -31,9 +31,9 @@ This document outlines the development roadmap, ongoing milestones, and future p
   - Consolidate exception hierarchy under `EnabizError`.
 - [ ] **RAG Engine Enhancements:**
   - Implement time-window filtering and token budget budgeting for large medical histories.
-  - Support natural language chat / Q&A queries against local health database.
+  - [x] Support natural language chat / Q&A queries against local health database (`RAGEngine.ask_question`, `enabiz-ai ask`).
 - [ ] **Testing & Coverage:**
-  - Add mock unit test suite for `authenticator.py` strategy selection and fallback.
+  - [x] Add mock unit test suite for `authenticator.py` strategy selection and fallback (`tests/test_authenticator.py`).
   - Add unit test suite for `llm_extractor.py` JSON extraction.
 
 ---

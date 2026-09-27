@@ -110,3 +110,21 @@ class TestServices:
         report = await rag.generate_weekly_report(person_name="Fatma")
         assert "MedGemma Klinik Değerlendirme" in report
         assert "Hemoglobin ve Ferritin" in report
+
+    @patch("httpx.AsyncClient.post")
+    async def test_rag_engine_ask_question(self, mock_post, temp_db: HealthDatabase):
+        from unittest.mock import MagicMock
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": "<think>\nQuery asks for last fasting glucose. Checking test dates.\n</think>\nSon açlık kan şekeri (Glukoz) değeriniz: 92 mg/dL (Normal sınırlarda)."
+            }
+        }
+        mock_post.return_value = mock_response
+
+        rag = RAGEngine(db=temp_db, model="deepseek-r1:70b")
+        answer = await rag.ask_question(question="Son kan şekerim kaç?", person_name="Ahmet")
+        assert "<think>" not in answer
+        assert "Son açlık kan şekeri" in answer
+        assert "92 mg/dL" in answer
