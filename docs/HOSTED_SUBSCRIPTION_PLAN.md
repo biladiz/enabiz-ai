@@ -191,12 +191,15 @@ graph TD
 ### Epic 3: Telegram Concierge Bot Gateway
 - [ ] Build multi-tenant Telegram Bot handler with session state machine.
 - [ ] Support interactive 2FA OTP relay tied to specific subscriber chat IDs.
+- [ ] Implement interactive on-demand password prompt during user daytime hours (10:00–18:00) for zero-stored-password subscribers.
+- [ ] Implement automatic next-day rescheduling if user does not reply to daytime Telegram prompt within timeout.
 - [ ] Implement `/report`, `/summary`, `/ask`, and `/status` commands.
 - [ ] Enable Telegram `protect_content` for health reports.
 
 ### Epic 4: Credential Security & e-Nabız Isolation
 - [ ] Restrict hosted service onboarding to **e-Nabız direct credentials only** (disable e-Devlet password entry on hosted mode).
 - [ ] Implement in-memory credential consumption with zero disk writes for plaintext passwords.
+- [ ] Support zero-stored-password mode (subscribers never persist passwords on server; enter ephemeral password via Telegram per run).
 - [ ] Encrypt storage states using unique per-user keys.
 
 ### Epic 5: Billing & License Access Control

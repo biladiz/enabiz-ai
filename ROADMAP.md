@@ -107,3 +107,37 @@ Designed for users who want e-Nabız AI weekly intelligence without touching cod
 4. **Epic 4 — Credential Enclave & Security:** In-memory credential consumption with zero plain-text disk storage.
 5. **Epic 5 — Subscription & Billing Integration:** 50-seat inventory lock and domestic Turkish payment processor integration (Iyzico / Shopier).
 6. **Epic 6 — Legal & KVKK Compliance Kit:** Mandatory Turkish consent contracts (Açık Rıza & Aydınlatma Metni) and automated deletion routines.
+
+---
+
+## 🖥️ Future Backlog: Local User Portal & Zero-Stored-Password Architecture
+
+Two major self-service and privacy-first features planned for future releases:
+
+### 1. Local Self-Service User Web Portal (`enabiz-ui`)
+A lightweight, modern web interface (e.g., FastAPI + vanilla CSS/HTML) running locally on `localhost` to eliminate CLI configuration friction:
+- **Visual Credential & Profile Manager:**
+  - Users can input their TC Kimlik No, e-Devlet password, and/or direct e-Nabız password in an intuitive UI.
+  - In-browser / local PBKDF2 + Fernet key derivation securely hashes and encrypts these credentials with a user-chosen master passphrase.
+  - Encrypted credentials and settings are saved directly to the user's local directory (`~/.enabiz-ai/profiles/<id>/credentials.enc` or local `.env`) and loaded securely by the automation engine without exposing plain-text keys.
+- **Visual Telegram Bot Activation:**
+  - Guides non-technical users through registering their Telegram bot token, pairing their Chat ID, and testing connectivity without editing configuration files manually.
+- **Biomarker & Sync Overview:**
+  - Visual summary of recorded lab results, historical trends, and last synchronization status.
+
+### 2. Zero-Stored-Password Mode (On-Demand Daytime Telegram Authentication & Rescheduling)
+An ultra-secure, privacy-first execution mode for users who prefer **not to store any passwords on disk** (even in encrypted form):
+- **Portal Setup with Zero Credentials:**
+  - Users use the local web portal solely to pair and enable their Telegram bot, without entering or saving any e-Devlet or e-Nabız passwords into the application.
+- **Daytime Scheduling Shift:**
+  - Because interactive user input is required, the scheduler shifts weekly/periodic syncs from overnight hours (03:00 AM) to the **user's active daytime hours** (e.g., 10:00 AM – 18:00 PM).
+- **On-Demand Password Prompt via Telegram:**
+  - When the scheduled sync time arrives, the Telegram bot pings the user:  
+    *"⏰ e-Nabız haftalık senkronizasyon zamanı! Giriş yapmak için lütfen e-Nabız şifrenizi girin."*
+  - The user texts their password to the private bot.
+  - Playwright receives the credential, performs the login handshake, saves the authenticated browser session state, and **immediately purges the password from memory**. Zero passwords are ever written to disk or `.env`.
+- **Automatic Next-Day Rescheduling on No Response:**
+  - If the user is busy and does not reply within an interactive timeout window (e.g., 30–60 minutes), the system cancels the attempt cleanly.
+  - The scheduler automatically **re-schedules the sync for the next day at the same daytime slot**, notifying the user:  
+    *"⏳ Yanıt alınamadı. Senkronizasyon yarın aynı saate ertelendi."*
+  - The system continues to operate autonomously and reliably without requiring any stored credentials on the user's machine.
