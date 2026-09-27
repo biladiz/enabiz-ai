@@ -97,9 +97,16 @@ def profile_list():
     table.add_column("Profil ID", style="cyan")
     table.add_column("Kişi Adı", style="bold white")
     table.add_column("Yakınlık", style="yellow")
+    table.add_column("Giriş", style="green")
     table.add_column("Kimlik", style="green")
-    table.add_column("Oturum (2FA)", style="magenta")
+    table.add_column("Oturum", style="magenta")
     table.add_column("Tahlil / Ziyaret", style="blue")
+
+    login_method_labels = {
+        "edevlet": "🔑 e-Devlet",
+        "enabiz": "🏥 e-Nabız",
+        "both": "🔑+🏥 İkisi",
+    }
 
     sync_svc = SyncService(config)
     stats_map = _run_async(sync_svc.get_all_profiles_stats(profiles))
@@ -109,6 +116,7 @@ def profile_list():
         has_cred = "✅ Şifrelendi" if cred_mgr.exists() else "❌ Yok"
         session_file = pm.get_session_path(p.id)
         has_session = "✅ Aktif" if session_file.exists() else "⚠️ Giriş Gerekli"
+        method_str = login_method_labels.get(p.login_method, p.login_method)
 
         s = stats_map.get(p.id, {})
         if s:
@@ -116,7 +124,7 @@ def profile_list():
         else:
             stats_str = "-"
 
-        table.add_row(p.id, p.display_name, p.relation, has_cred, has_session, stats_str)
+        table.add_row(p.id, p.display_name, p.relation, method_str, has_cred, has_session, stats_str)
 
     console.print(table)
 
@@ -127,7 +135,10 @@ def profile_add(
     display_name: str = typer.Option(None, "--name", "-n", help="Görünen isim (örn: 'Annem (Ayşe)')"),
     relation: str = typer.Option(None, "--relation", "-r", help="Yakınlık (örn: 'Anne', 'Baba')"),
 ):
-    """➕ Add a new family member profile with their e-Devlet credentials."""
+    """➕ Add a new family member profile with login credentials.
+
+    Interactive wizard that supports e-Devlet, ENabız, or both login methods.
+    """
     config = AppConfig()
     pm = ProfileManager(config.data_dir)
 
@@ -143,7 +154,30 @@ def profile_add(
         relation = typer.prompt("  Yakınlık Derecesi (örn: Anne, Baba, Eş)", default="Aile")
 
     tc_no = typer.prompt("  TC Kimlik No (11 hane)")
-    edevlet_pass = getpass.getpass("  e-Devlet Şifresi: ")
+
+    # Login method selection
+    console.print("\n[bold cyan]  Giriş Yöntemi Seçimi:[/bold cyan]")
+    console.print("    1. e-Devlet şifresi + 2FA (varsayılan)")
+    console.print("    2. e-Nabız şifresi (2FA ile veya 2FA'sız)")
+    console.print("    3. Her ikisi de (önce e-Devlet denenir, başarısız olursa e-Nabız)")
+    method_choice = typer.prompt("  Seçiminiz", default="1")
+
+    edevlet_pass: str | None = None
+    enabiz_pass: str | None = None
+    twofa_enabled = True
+    login_method = "edevlet"
+
+    if method_choice in ("1", "3"):
+        edevlet_pass = getpass.getpass("  e-Devlet Şifresi: ")
+
+    if method_choice in ("2", "3"):
+        enabiz_pass = getpass.getpass("  e-Nabız Şifresi: ")
+        twofa_enabled = typer.confirm("  Bu hesap için 2FA (SMS doğrulama) etkin mi?", default=True)
+
+    if method_choice == "2":
+        login_method = "enabiz"
+    elif method_choice == "3":
+        login_method = "both"
 
     passphrase = _get_passphrase("  Master Şifre (bu bilgileri şifrelemek için): ")
 
@@ -159,17 +193,27 @@ def profile_add(
         id=validated_id,
         display_name=display_name,
         relation=relation,
+        login_method=login_method,
         created_at=datetime.now(),
     )
     pm.save_profile(prof)
 
     # Save encrypted credentials
     cred_mgr = pm.get_credential_manager(prof.id)
-    cred_mgr.save(tc_no, edevlet_pass, passphrase)
+    cred_mgr.save(
+        tc_no=tc_no,
+        master_passphrase=passphrase,
+        password=edevlet_pass,
+        enabiz_password=enabiz_pass,
+        twofa_enabled=twofa_enabled,
+    )
 
+    method_label = {"edevlet": "e-Devlet", "enabiz": "e-Nabız", "both": "e-Devlet + e-Nabız"}[login_method]
     console.print(Panel(
-        f"[green]✓ {display_name} ({relation}) profili başarıyla oluşturuldu ve kimlik bilgileri şifrelendi![/green]\n\n"
-        f"Şimdi ilk oturum açma ve 2FA onayını gerçekleştirmek için:\n"
+        f"[green]✓ {display_name} ({relation}) profili başarıyla oluşturuldu![/green]\n"
+        f"   Giriş yöntemi: [cyan]{method_label}[/cyan]\n"
+        f"   Kimlik bilgileri şifrelendi.\n\n"
+        f"Şimdi ilk oturum açmak için:\n"
         f"  [bold]enabiz-ai profile login {prof.id}[/bold]",
         title="🎉 Başarılı",
         border_style="green",
@@ -191,7 +235,8 @@ def profile_login(
 
     passphrase = _get_passphrase()
 
-    console.print(f"[cyan]🚀 {profile.display_name} için e-Devlet giriş penceresi açılıyor...[/cyan]")
+    method_str = {"edevlet": "e-Devlet", "enabiz": "e-Nabız", "both": "e-Devlet / e-Nabız"}.get(profile.login_method, "")
+    console.print(f"[cyan]🚀 {profile.display_name} için giriş penceresi açılıyor ({method_str})...[/cyan]")
     try:
         ok = _run_async(authenticate_profile(
             profile_id=profile_id,
@@ -313,10 +358,13 @@ def weekly(
                 border_style="cyan",
             ))
 
-            res, report = await sync_svc.run_weekly_pipeline(p)
-            console.print(f"[green]✓ Veriler güncellendi: {res}[/green]")
-            console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
-            console.print(f"[green]✓ [{p.display_name}] haftalık değerlendirmesi tamamlandı![/green]\n")
+            try:
+                res, report = await sync_svc.run_weekly_pipeline(p)
+                console.print(f"[green]✓ Veriler güncellendi: {res}[/green]")
+                console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
+                console.print(f"[green]✓ [{p.display_name}] haftalık değerlendirmesi tamamlandı![/green]\n")
+            except Exception as e:
+                console.print(f"[red]✗ [{p.display_name}] işlemi sırasında hata oluştu: {e}[/red]\n")
 
     _run_async(_runner())
 
@@ -343,8 +391,11 @@ def analyze(
                 continue
 
             console.print(f"[bold cyan]🧠 [{p.display_name}] RAG Klinik Analiz Başlatılıyor...[/bold cyan]")
-            report = await sync_svc.run_clinical_analysis(p, notify=notify)
-            console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
+            try:
+                report = await sync_svc.run_clinical_analysis(p, notify=notify)
+                console.print(Panel(report, title=f"📋 Klinik Rapor: {p.display_name}", border_style="green"))
+            except Exception as e:
+                console.print(f"[red]✗ [{p.display_name}] analizi sırasında hata oluştu: {e}[/red]\n")
 
     _run_async(_analyze())
 

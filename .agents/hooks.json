@@ -1,0 +1,11 @@
+{
+  "docs-version-sync": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": ".venv\\Scripts\\python.exe scripts/check_docs_sync.py --warn-only"
+      }
+    ]
+  }
+}

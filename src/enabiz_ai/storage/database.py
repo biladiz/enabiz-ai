@@ -142,9 +142,12 @@ class HealthDatabase:
         """Create the database connection and tables."""
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA foreign_keys = ON;")
+        await self._conn.execute("PRAGMA journal_mode = WAL;")
+        await self._conn.execute("PRAGMA busy_timeout = 5000;")
         await self._conn.executescript(SCHEMA_SQL)
         await self._conn.commit()
-        logger.info("Database initialized at %s", self.db_path)
+        logger.info("Database initialized at %s (WAL mode enabled)", self.db_path)
 
     async def close(self) -> None:
         """Close the database connection."""

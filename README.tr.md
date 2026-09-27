@@ -19,9 +19,11 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 ┌─────────────────────────────────────────────────────────────────┐
 │  Kendi Cihazınız (Windows dev) ──Tailscale──▶ MSI DGX Spark     │
 │                                                                 │
-│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright) ─▶ e-Devlet Girişi │
-│              │              │                       │           │
-│              │              ▼                       ▼           │
+│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright)                    │
+│              │            ├──▶ e-Devlet Girişi (2FA İletimi)    │
+│              │            └──▶ Doğrudan e-Nabız (2FA'lı/2FA'sız)│
+│              │                       │           │              │
+│              │                       ▼           ▼              │
 │              │       e-Nabız Gezinme (LLM)   2FA ─▶ Telegram    │
 │              │              │                                   │
 │              ▼              ▼                                   │
@@ -32,13 +34,16 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 ## Özellikler
 
 - **Tamamen asenkron** Python 3.11+ mimarisi (`asyncio` ve `aiosqlite`)
+- **Çift Giriş Yöntemi ve Otomatik Yedekleme** — e-Devlet veya doğrudan e-Nabız şifresi ile giriş; birincil yöntem başarısız olursa ikincisine otomatik geçiş
+- **Esnek 2FA Desteği** — Telegram Bot ile SMS onay iletimi veya konsol yedeği; 2FA'lı ve 2FA'sız hesaplar desteklenir
+- **Çoklu Profil Yalıtımı** — Her aile bireyi için izole şifreli kimlikler, sağlık kayıtları ve dosya dizinleri
 - **Yerel görsel modeller** (Arayüz analizi için Ollama üzerinden `qwen2.5-vl:14b`)
 - **Hibrit tarayıcı otomasyonu** — Giriş işlemleri için kararlı Playwright, portal içi gezinme için LLM destekli gezgin
-- **Telegram Bot ile 2FA iletimi** (veya konsol yedeği) — Dışarıya port açmaya gerek yoktur
 - **Şifreli kimlik saklama** (Fernet + PBKDF2) — Parola asla LLM'e veya açık metin olarak diske aktarılmaz
 - **PDF ayrıştırma** — Tıbbi laboratuvar tabloları için TableFormer destekli IBM Docling entegrasyonu
 - **SQLite veri depolama** — Mükerrer kayıt engelleme (deduplication), tam metin arama ve CSV dışa aktarımı
 - **Platform bağımsız** — Windows üzerinde geliştirme, DGX Spark (ARM64 Ubuntu) üzerinde üretim dağıtımı
+
 
 ## Hızlı Başlangıç
 
@@ -89,11 +94,34 @@ Bu sihirbaz şunları gerçekleştirir:
 
 ## Kullanım
 
+### Çoklu Profil Yönetimi ve Çift Giriş
+
+Sistem birden fazla aile bireyinin profilini birbirinden izole şekilde destekler. Her profil **e-Devlet**, doğrudan **e-Nabız şifresi** veya **her ikisi** ile (otomatik yedekleme/fallback) kimlik doğrulayabilir:
+
+```bash
+# Yeni profil eklemek için etkileşimli sihirbaz
+enabiz-ai profile add anne --name "Annem" --relation "Anne"
+
+# Sihirbaz giriş yöntemini seçmenizi ister:
+# 1. e-Devlet şifresi + 2FA (varsayılan)
+# 2. Doğrudan e-Nabız şifresi (2FA SMS'li veya 2FA'sız)
+# 3. Her iki yöntem (önce e-Devlet denenir, başarısız olursa e-Nabız'a geçilir)
+
+# Kayıtlı profilleri ve giriş yöntemlerini listeleme
+enabiz-ai profile list
+
+# Bir profil için oturum açıp çerezleri önbelleğe alma
+enabiz-ai profile login anne
+```
+
+### Veri Senkronizasyonu ve Sorgular
+
 ```bash
 # e-Nabız verilerini senkronize etme
 enabiz-ai sync labs          # Tahlil sonuçlarını indir ve ayrıştır
 enabiz-ai sync rx            # Reçeteleri indir
 enabiz-ai sync all           # Tam senkronizasyon
+enabiz-ai weekly --profile all # Tüm profiller için haftalık senkronizasyon ve yapay zeka raporu
 
 # Yerel PDF dosyalarını ayrıştırma
 enabiz-ai parse rapor.pdf    # Tahlil sonucu PDF dosyasını ayrıştır
@@ -106,9 +134,11 @@ enabiz-ai query labs -s "hemoglobin"    # Test adına göre ara
 # Verileri dışa aktarma
 enabiz-ai export csv --table lab_tests -o sonuclar.csv
 
-# Sistem durumunu görüntüleme
+# Sistem durumu ve sürüm bilgisi
 enabiz-ai status
+enabiz-ai version
 ```
+
 
 ## Tailscale Üzerinden DGX Spark Dağıtımı
 
@@ -181,8 +211,9 @@ src/enabiz_ai/
 │   ├── manager.py         # Fernet/PBKDF2 şifreleme
 │   └── models.py          # Pydantic kimlik modelleri
 ├── browser/               # Tarayıcı otomasyonu
-│   ├── authenticator.py   # Görünür Chrome ile etkileşimli oturum açma
-│   ├── edevlet_login.py   # Kararlı e-Devlet kimlik doğrulama
+│   ├── authenticator.py   # Strateji seçici ve etkileşimli kimlik doğrulama
+│   ├── edevlet_login.py   # Kararlı e-Devlet kimlik doğrulama işleyicisi
+│   ├── enabiz_login.py    # Doğrudan e-Nabız T.C.+şifre kimlik doğrulama işleyicisi
 │   └── session_manager.py # Dinlenim halinde Fernet şifreli çerez saklama
 ├── extraction/            # Belge ve portal ayrıştırma
 │   ├── harvester.py       # SHA-256 kimlikleri ile doğrudan portal hasadı

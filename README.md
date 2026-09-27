@@ -19,9 +19,11 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 ┌─────────────────────────────────────────────────────────────────┐
 │  Your Machine (Windows dev) ──Tailscale──▶ MSI DGX Spark (prod)│
 │                                                                 │
-│  CLI ─▶ Orchestrator ─▶ Browser (Playwright) ─▶ e-Devlet Login  │
-│              │              │                       │           │
-│              │              ▼                       ▼           │
+│  CLI ─▶ Orchestrator ─▶ Browser (Playwright)                    │
+│              │            ├──▶ e-Devlet Login (with 2FA Relay)  │
+│              │            └──▶ e-Nabız Direct (with/without 2FA)│
+│              │                       │           │              │
+│              │                       ▼           ▼              │
 │              │         e-Nabız Nav (LLM)    2FA ─▶ Telegram     │
 │              │              │                                   │
 │              ▼              ▼                                   │
@@ -32,13 +34,16 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 ## Features
 
 - **Fully async** Python 3.11+ implementation
+- **Dual-Method Authentication & Auto-Fallback** — Log in using e-Devlet or direct e-Nabız credentials; store both for automated fallback
+- **Flexible 2FA Support** — Telegram OTP relay or console fallback; supports 2FA-enabled and 2FA-exempt accounts
+- **Multi-Profile Isolation** — Separate encrypted credentials, health records, and storage sandboxes for each family member
 - **Local vision models** (qwen2.5-vl:14b via Ollama) for UI understanding
-- **Hybrid browser automation** — deterministic Playwright for login, LLM-driven for portal navigation
-- **2FA relay** via Telegram Bot (or console fallback) — no open ports needed
-- **Encrypted credentials** (Fernet + PBKDF2) — password never exposed to LLM
+- **Hybrid browser automation** — Deterministic Playwright for login, LLM-driven for portal navigation
+- **Encrypted credentials** (Fernet + PBKDF2) — Passwords never exposed to LLM or stored in plain text
 - **PDF parsing** using IBM Docling with TableFormer for medical lab tables
 - **SQLite storage** with dedup, full-text search, and CSV export
-- **Cross-platform** — develop on Windows, deploy on DGX Spark (ARM64 Ubuntu)
+- **Cross-platform** — Develop on Windows, deploy on DGX Spark (ARM64 Ubuntu)
+
 
 ## Quick Start
 
@@ -89,11 +94,34 @@ This wizard will:
 
 ## Usage
 
+### Multi-Profile Management & Dual Login
+
+The system supports multiple isolated family member profiles. Each profile can authenticate via **e-Devlet**, direct **e-Nabız password**, or **both** (with automatic fallback):
+
+```bash
+# Interactive wizard to add a new profile
+enabiz-ai profile add anne --name "Annem" --relation "Anne"
+
+# The wizard will prompt you to select an authentication method:
+# 1. e-Devlet password + 2FA (default)
+# 2. e-Nabız direct password (with or without 2FA SMS)
+# 3. Both methods (tries e-Devlet first, falls back to e-Nabız)
+
+# List all configured profiles and their login methods
+enabiz-ai profile list
+
+# Authenticate and cache session for a profile
+enabiz-ai profile login anne
+```
+
+### Data Synchronization & Queries
+
 ```bash
 # Sync health data from e-Nabız
 enabiz-ai sync labs          # Download & parse lab results
 enabiz-ai sync rx            # Download prescriptions
 enabiz-ai sync all           # Full sync
+enabiz-ai weekly --profile all # Run weekly sync & AI report for all profiles
 
 # Parse local PDF files
 enabiz-ai parse report.pdf   # Parse a lab result PDF
@@ -106,9 +134,11 @@ enabiz-ai query labs -s "hemoglobin"    # Search
 # Export data
 enabiz-ai export csv --table lab_tests -o results.csv
 
-# System status
+# System status & version
 enabiz-ai status
+enabiz-ai version
 ```
+
 
 ## DGX Spark Deployment via Tailscale
 
@@ -181,8 +211,9 @@ src/enabiz_ai/
 │   ├── manager.py         # Fernet/PBKDF2 encryption
 │   └── models.py          # Credential Pydantic models
 ├── browser/               # Browser automation
-│   ├── authenticator.py   # Visible Chrome browser interactive login
-│   ├── edevlet_login.py   # Deterministic e-Devlet authentication
+│   ├── authenticator.py   # Strategy selector & interactive authentication
+│   ├── edevlet_login.py   # Deterministic e-Devlet authentication handler
+│   ├── enabiz_login.py    # Direct e-Nabız TC+password authentication handler
 │   └── session_manager.py # Cookie persistence with Fernet encryption at rest
 ├── extraction/            # Document and portal parsing
 │   ├── harvester.py       # Direct portal harvesting with SHA-256 IDs
