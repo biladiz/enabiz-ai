@@ -38,6 +38,65 @@ This document outlines the development roadmap, ongoing milestones, and future p
 
 ---
 
+## 🔬 Investigation Milestone: MSI DGX Spark Hardware Audit & Specialized Multi-Model Routing
+
+Plan to benchmark the production **MSI DGX Spark** (Ubuntu ARM64) and architect specialized multi-model routing for distinct pipeline tasks rather than relying on a single general-purpose model.
+
+### 1. Hardware & VRAM Audit (MSI DGX Spark)
+- [ ] Profile available GPU/NPU architecture, total VRAM, CUDA runtime, and memory bandwidth on the DGX Spark.
+- [ ] Measure Ollama inference latency, token generation speeds (tok/s), and thermal throttling under sustained load.
+- [ ] Determine optimal quantization levels (`Q4_K_M` vs `Q8_0` vs `fp16`) for 7B, 14B, and 32B model sizes within available VRAM.
+
+### 2. Task Specialization & Candidate Model Benchmarking
+Distinct tasks have fundamentally different performance, context, and intelligence requirements:
+
+- **Job A: Web Navigation, OCR & Structured Document Extraction:**
+  - *Requirements:* High visual element grounding, rapid JSON formatting, low latency, robust OCR for lab tables.
+  - *Candidate Models to Evaluate:*
+    - `qwen2.5-vl:7b` / `qwen2.5-vl:14b`: Primary candidates for Playwright UI understanding and PDF document OCR.
+    - `llama-3.2-vision:11b`: High precision for complex medical PDF tables.
+    - `qwen2.5:7b-instruct`: Ultra-fast structured JSON extraction for pre-parsed plain text.
+- **Job B: Clinical Health Reasoning, Longitudinal Trend Analysis & Medical Suggestions:**
+  - *Requirements:* Deep biomedical understanding, nuanced Turkish fluency, empathetic and clear communication, chain-of-thought reasoning across multi-year biomarker trends.
+  - *Candidate Models to Evaluate:*
+    - `qwen2.5:14b` / `qwen2.5:32b` (4-bit): High Turkish fluency, strong medical synthesis, and reliable doctor visit talking points.
+    - `deepseek-r1:14b` / `deepseek-r1:8b`: Deep chain-of-thought reasoning for correlating multiple simultaneous abnormal markers.
+    - `meditron:7b` / `biomistral:7b`: Medical-domain specialized LLMs (evaluating Turkish translation and clinical terminology accuracy).
+
+### 3. Routing Architecture Decision: In-App vs. MSI DGX Spark Gateway
+Evaluate the architectural design for routing requests to specialized models:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        MODEL ROUTING STRATEGIES                        │
+│                                                                        │
+│  Option 1: In-App Role Slots (Direct)                                  │
+│  enabiz-ai config ──▶ extraction_model ──▶ Ollama (/api/chat)          │
+│                   ──▶ clinical_model   ──▶ Ollama (/api/chat)          │
+│                                                                        │
+│  Option 2: MSI DGX Spark Gateway Proxy (LiteLLM / vLLM)                │
+│  enabiz-ai ──▶ LiteLLM Proxy on DGX Spark ──▶ Ollama / vLLM backends   │
+│                (model aliases: 'extractor', 'clinical-expert')         │
+│                                                                        │
+│  ⭐ Recommendation: In-App Role Abstraction with OpenAI-compatible API  │
+│     Direct connection to Ollama by default, with seamless support for   │
+│     a LiteLLM / Open-WebUI proxy on the DGX Spark if needed.           │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+- [ ] **Phase A (In-App Roles):** Separate single `ollama_model` in `config.py` into distinct functional roles:
+  - `model_vision_nav`: For browser automation (`qwen2.5-vl`).
+  - `model_extraction`: For document OCR and JSON parsing (`qwen2.5-vl` / `llama3.2-vision`).
+  - `model_clinical_rag`: For longitudinal health evaluation and doctor talking points (`qwen2.5:14b` / `deepseek-r1`).
+  - `model_chat`: For interactive Telegram Q&A (`qwen2.5:7b`).
+- [ ] **Phase B (MSI Gateway Proxy Investigation):** Evaluate deploying **LiteLLM Proxy** on the DGX Spark:
+  - Decouples client applications from backend model providers.
+  - Enables centralized fallback (e.g. fall back from 14B to 7B if VRAM is constrained).
+  - Provides model load balancing, request queuing, and latency tracking.
+- [ ] **VRAM Thrashing Prevention:** Implement sequential batch scheduling (execute all Job A extractions first, then switch to Job B clinical reasoning) so Ollama does not constantly swap large models in and out of GPU memory.
+
+---
+
 ## 🌟 Future Backlog: Managed Hosted Subscription Service (Max 50 Users)
 
 > Detailed Technical Blueprint: [docs/HOSTED_SUBSCRIPTION_PLAN.md](docs/HOSTED_SUBSCRIPTION_PLAN.md)
