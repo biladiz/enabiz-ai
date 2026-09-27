@@ -1,5 +1,7 @@
 # 🏥 e-Nabız AI Automation System
 
+[🇬🇧 English](README.md) | [🇹🇷 Türkçe](README.tr.md)
+
 > [!CAUTION]
 > ### ⚠️ Essential Medical & Legal Disclaimer
 >
@@ -197,4 +199,4 @@ src/enabiz_ai/
 
 ## License
 
-Private — personal use only. Do not distribute scraped health data.
+MIT License — Personal and educational use. See [LICENSE](LICENSE) and [LISANS.md](LISANS.md) for full terms and medical/legal disclaimers.
