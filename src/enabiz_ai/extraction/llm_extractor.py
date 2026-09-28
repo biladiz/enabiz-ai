@@ -134,12 +134,14 @@ class LLMExtractor:
         self,
         text: str,
         report_id: str = "llm_extracted",
+        report_date: datetime | None = None,
     ) -> LabReport:
         """Extract lab results from free text using LLM.
 
         Args:
             text: Raw text containing lab results.
             report_id: Identifier for the generated report.
+            report_date: Optional report date. If None, tries to parse or uses now.
 
         Returns:
             A LabReport with extracted test data.
@@ -168,10 +170,9 @@ class LLMExtractor:
             logger.warning("Failed to parse LLM response as JSON: %s", e)
             logger.debug("Raw LLM response: %s", response[:500])
 
-        from datetime import datetime
         return LabReport(
             report_id=report_id,
-            date=datetime.now(),
+            date=report_date or datetime.now(),
             tests=tests,
             raw_text=text[:5000],
         )
@@ -179,11 +180,13 @@ class LLMExtractor:
     async def extract_prescriptions(
         self,
         text: str,
+        prescription_date: datetime | None = None,
     ) -> list[Prescription]:
         """Extract prescription data from free text using LLM.
 
         Args:
             text: Raw text containing prescription information.
+            prescription_date: Optional prescription date. If None, uses now.
 
         Returns:
             List of extracted Prescription objects.
@@ -205,7 +208,7 @@ class LLMExtractor:
                 rx_id = hashlib.sha256(f"{med_name}_{idx}".encode("utf-8")).hexdigest()[:12]
                 prescriptions.append(Prescription(
                     prescription_id=f"rx_{rx_id}",
-                    date=datetime.now(),
+                    date=prescription_date or datetime.now(),
                     medication=med_name,
                     dosage=item.get("dosage"),
                     frequency=item.get("frequency"),

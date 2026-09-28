@@ -31,3 +31,13 @@ class TestCliCommands:
     def test_schedule_add_invalid_profile(self):
         result = runner.invoke(app, ["schedule", "add", "--profile", "../../etc"])
         assert result.exit_code != 0
+
+    def test_ask_help_command(self):
+        result = runner.invoke(app, ["ask", "--help"])
+        assert result.exit_code == 0
+        assert "Soru-Cevap" in result.stdout
+
+    def test_ask_nonexistent_profile(self):
+        result = runner.invoke(app, ["ask", "Son kan testim neydi?", "--profile", "nonexistent_user"])
+        assert result.exit_code != 0
+        assert "Profil bulunamadı" in result.stdout

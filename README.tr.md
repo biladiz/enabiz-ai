@@ -16,29 +16,34 @@ Türkiye'nin e-Devlet/e-Nabız sağlık portalına giriş yapan, yapay zeka dest
 ## Mimari
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Kendi Cihazınız (Windows dev) ──Tailscale──▶ MSI DGX Spark     │
-│                                                                 │
-│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright) ─▶ e-Devlet Girişi │
-│              │              │                       │           │
-│              │              ▼                       ▼           │
-│              │       e-Nabız Gezinme (LLM)   2FA ─▶ Telegram    │
-│              │              │                                   │
-│              ▼              ▼                                   │
-│         Docling (PDF) ─▶ SQLite DB ◀── LLM Çıkarıcı (Ollama)    │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  Kendi Cihazınız (Windows dev) ──Tailscale──▶ MSI EdgeXpert 13SUS      │
+│                                            (NVIDIA GB10 128GB Unified) │
+│  CLI ─▶ Orkestratör ─▶ Tarayıcı (Playwright)                           │
+│              │            ├──▶ e-Devlet Girişi (2FA İletimi)           │
+│              │            └──▶ Doğrudan e-Nabız (2FA'lı/2FA'sız)       │
+│              │                       │           │                     │
+│              │                       ▼           ▼                     │
+│              │       e-Nabız Gezinme (Qwen2.5) 2FA ─▶ Telegram         │
+│              │              │                                          │
+│              ▼              ▼                                          │
+│         Docling (PDF) ─▶ SQLite DB ◀── Klinik RAG (DeepSeek-R1 70B)    │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Özellikler
 
 - **Tamamen asenkron** Python 3.11+ mimarisi (`asyncio` ve `aiosqlite`)
-- **Yerel görsel modeller** (Arayüz analizi için Ollama üzerinden `qwen2.5-vl:14b`)
+- **Çift Giriş Yöntemi ve Otomatik Yedekleme** — e-Devlet veya doğrudan e-Nabız şifresi ile giriş; birincil yöntem başarısız olursa ikincisine otomatik geçiş
+- **Esnek 2FA Desteği** — Telegram Bot ile SMS onay iletimi veya konsol yedeği; 2FA'lı ve 2FA'sız hesaplar desteklenir
+- **Çoklu Profil Yalıtımı** — Her aile bireyi için izole şifreli kimlikler, sağlık kayıtları ve dosya dizinleri
+- **Uzmanlaşmış Yerel Tıbbi Modeller** — Klinik elektronik sağlık kaydı analizi için Google MedGemma (27B) ve DeepSeek-R1 (70B/32B), görsel arayüz ve OCR için Qwen2.5-VL (14B)
 - **Hibrit tarayıcı otomasyonu** — Giriş işlemleri için kararlı Playwright, portal içi gezinme için LLM destekli gezgin
-- **Telegram Bot ile 2FA iletimi** (veya konsol yedeği) — Dışarıya port açmaya gerek yoktur
 - **Şifreli kimlik saklama** (Fernet + PBKDF2) — Parola asla LLM'e veya açık metin olarak diske aktarılmaz
 - **PDF ayrıştırma** — Tıbbi laboratuvar tabloları için TableFormer destekli IBM Docling entegrasyonu
 - **SQLite veri depolama** — Mükerrer kayıt engelleme (deduplication), tam metin arama ve CSV dışa aktarımı
-- **Platform bağımsız** — Windows üzerinde geliştirme, DGX Spark (ARM64 Ubuntu) üzerinde üretim dağıtımı
+- **Platform bağımsız** — Windows üzerinde geliştirme, MSI EdgeXpert 13SUS (NVIDIA GB10 128GB ARM64 Ubuntu) üzerinde üretim dağıtımı
+
 
 ## Hızlı Başlangıç
 
@@ -54,14 +59,20 @@ playwright install chromium
 
 ### 2. Ollama Kurulumu
 
-[Ollama](https://ollama.com/) yazılımını yükleyin ve görsel modeli indirin:
+[Ollama](https://ollama.com/) yazılımını yükleyin ve uzmanlaşmış modelleri indirin:
 
 ```bash
+# 1. Görsel gezinme ve OCR modeli (kalıcı yuva 1)
 ollama pull qwen2.5-vl:14b
+
+# 2. Klinik teşhis ve sağlık analizi modelleri (kalıcı yuva 2)
+# Seçenek A: DeepSeek-R1 70B (Derin akıl yürütmeli klinik teşhis)
+ollama pull deepseek-r1:70b
+# Seçenek B: Google MedGemma 27B (Google Health AI alan-özgü klinik sentez)
+ollama pull medgemma:27b
 ```
 
-> **Tailscale ile DGX Spark Kullanımı:** Ollama DGX Spark üzerinde çalışıyorsa `.env` dosyanızda şu şekilde tanımlayın:
-> `OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434`
+> **Tailscale ile MSI EdgeXpert 13SUS Kullanımı:** NVIDIA GB10 Grace Blackwell Superchip üzerindeki 128 GB birleşik bellek ile birden fazla uzmanlaşmış model belleğe kalıcı olarak yerleşir ve model takas gecikmesi yaşanmaz (`OLLAMA_MAX_LOADED_MODELS=2`). `.env` dosyanızda şu şekilde tanımlayın: `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434`
 
 ### 3. Telegram Bot Kurulumu (Önerilen)
 
@@ -89,11 +100,34 @@ Bu sihirbaz şunları gerçekleştirir:
 
 ## Kullanım
 
+### Çoklu Profil Yönetimi ve Çift Giriş
+
+Sistem birden fazla aile bireyinin profilini birbirinden izole şekilde destekler. Her profil **e-Devlet**, doğrudan **e-Nabız şifresi** veya **her ikisi** ile (otomatik yedekleme/fallback) kimlik doğrulayabilir:
+
+```bash
+# Yeni profil eklemek için etkileşimli sihirbaz
+enabiz-ai profile add anne --name "Annem" --relation "Anne"
+
+# Sihirbaz giriş yöntemini seçmenizi ister:
+# 1. e-Devlet şifresi + 2FA (varsayılan)
+# 2. Doğrudan e-Nabız şifresi (2FA SMS'li veya 2FA'sız)
+# 3. Her iki yöntem (önce e-Devlet denenir, başarısız olursa e-Nabız'a geçilir)
+
+# Kayıtlı profilleri ve giriş yöntemlerini listeleme
+enabiz-ai profile list
+
+# Bir profil için oturum açıp çerezleri önbelleğe alma
+enabiz-ai profile login anne
+```
+
+### Veri Senkronizasyonu ve Sorgular
+
 ```bash
 # e-Nabız verilerini senkronize etme
 enabiz-ai sync labs          # Tahlil sonuçlarını indir ve ayrıştır
 enabiz-ai sync rx            # Reçeteleri indir
 enabiz-ai sync all           # Tam senkronizasyon
+enabiz-ai weekly --profile all # Tüm profiller için haftalık senkronizasyon ve yapay zeka raporu
 
 # Yerel PDF dosyalarını ayrıştırma
 enabiz-ai parse rapor.pdf    # Tahlil sonucu PDF dosyasını ayrıştır
@@ -103,20 +137,26 @@ enabiz-ai query labs                    # Tüm tahlil raporlarını listele
 enabiz-ai query labs --since 2024-01-01 # Tarihe göre filtrele
 enabiz-ai query labs -s "hemoglobin"    # Test adına göre ara
 
+# Doğal Dilde Sağlık Soru-Cevabı (Klinik Yapay Zeka)
+enabiz-ai ask "Son açlık kan şekerim ve geçmiş yıllara göre değişimi nedir?" --profile default
+enabiz-ai ask "Hangi tansiyon ilaçlarını kullanıyorum?" --profile anne --model medgemma:27b
+
 # Verileri dışa aktarma
 enabiz-ai export csv --table lab_tests -o sonuclar.csv
 
-# Sistem durumunu görüntüleme
+# Sistem durumu ve sürüm bilgisi
 enabiz-ai status
+enabiz-ai version
 ```
 
-## Tailscale Üzerinden DGX Spark Dağıtımı
 
-Üretim ortamında MSI DGX Spark üzerinde çalıştırmak için:
+## Tailscale Üzerinden MSI EdgeXpert 13SUS Dağıtımı
+
+Üretim ortamında MSI EdgeXpert 13SUS (NVIDIA GB10 128GB Birleşik Bellek) üzerinde çalıştırmak için:
 
 1. **Her iki makineye de Tailscale kurun**:
    ```bash
-   # DGX Spark üzerinde (Ubuntu ARM64)
+   # MSI EdgeXpert üzerinde (Ubuntu 24.04 LTS ARM64)
    curl -fsSL https://tailscale.com/install.sh | sh
    tailscale up
 
@@ -124,15 +164,15 @@ enabiz-ai status
    # https://tailscale.com/download/windows adresinden kurun
    ```
 
-2. **Ollama'yı DGX Spark'a yönlendirin** (`.env` içinde):
+2. **Ollama'yı MSI EdgeXpert'e yönlendirin** (`.env` içinde):
    ```env
-   OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434
+   OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434
    ```
 
-3. **Veya tüm sistemi doğrudan DGX Spark üzerinde çalıştırın**:
+3. **Veya tüm sistemi doğrudan MSI EdgeXpert üzerinde çalıştırın**:
    ```bash
-   # Tailscale ile DGX Spark'a bağlanın
-   ssh user@<dgx-spark-tailscale-ip>
+   # Tailscale ile MSI EdgeXpert'e bağlanın
+   ssh user@<edgexpert-tailscale-ip>
 
    # Depoyu klonlayıp kurun
    git clone <repo> && cd enabiz-ai
@@ -161,6 +201,7 @@ Test kapsamı:
 - **Türkçe Tarih Ayrıştırma ve Tahlil Referans Aralığı Değerlendirici** (`test_extraction.py`)
 - **PowerShell Enjeksiyon Temizleme ve HTML Çıktı Güvenliği** (`test_security.py`)
 - **Klinik RAG Motoru ve Çoklu Profil Toplu İşleme** (`test_services.py`)
+- **Kimlik Doğrulama Strateji Seçimi ve Yedekleme (Fallback)** (`test_authenticator.py`)
 - **Typer CLI Komut Satırı İşlemleri** (`test_cli.py`)
 
 ## Proje Yapısı
@@ -181,8 +222,9 @@ src/enabiz_ai/
 │   ├── manager.py         # Fernet/PBKDF2 şifreleme
 │   └── models.py          # Pydantic kimlik modelleri
 ├── browser/               # Tarayıcı otomasyonu
-│   ├── authenticator.py   # Görünür Chrome ile etkileşimli oturum açma
-│   ├── edevlet_login.py   # Kararlı e-Devlet kimlik doğrulama
+│   ├── authenticator.py   # Strateji seçici ve etkileşimli kimlik doğrulama
+│   ├── edevlet_login.py   # Kararlı e-Devlet kimlik doğrulama işleyicisi
+│   ├── enabiz_login.py    # Doğrudan e-Nabız T.C.+şifre kimlik doğrulama işleyicisi
 │   └── session_manager.py # Dinlenim halinde Fernet şifreli çerez saklama
 ├── extraction/            # Belge ve portal ayrıştırma
 │   ├── harvester.py       # SHA-256 kimlikleri ile doğrudan portal hasadı
@@ -196,6 +238,11 @@ src/enabiz_ai/
     ├── database.py        # Asenkron SQLite veritabanı (aiosqlite)
     └── file_store.py      # Kategorize edilmiş yerel sağlık dosyası depolama
 ```
+
+## Yol Haritası ve Gelecek Planları
+
+- 🗺️ **[Ürün Yol Haritası ve İş Listesi (ROADMAP.md)](ROADMAP.md)**: Yakın dönem geliştirmeleri ve aşama takibi.
+- 🏥 **[Barındırılan Abonelik Hizmeti Mimarisi (Maksimum 50 Kullanıcı)](docs/HOSTED_SUBSCRIPTION_PLAN.md)**: Kod çalıştırmak veya terminal kullanmak istemeyen kullanıcılar için Telegram tabanlı yönetilen konsiyerj hizmetinin teknik mimarisi ve güvenlik planı.
 
 ## Lisans
 

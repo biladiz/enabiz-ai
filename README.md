@@ -16,29 +16,34 @@ A privacy-first, locally-hosted automation system that logs into Turkey's e-Devl
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Your Machine (Windows dev) ──Tailscale──▶ MSI DGX Spark (prod)│
-│                                                                 │
-│  CLI ─▶ Orchestrator ─▶ Browser (Playwright) ─▶ e-Devlet Login  │
-│              │              │                       │           │
-│              │              ▼                       ▼           │
-│              │         e-Nabız Nav (LLM)    2FA ─▶ Telegram     │
-│              │              │                                   │
-│              ▼              ▼                                   │
-│         Docling (PDF) ─▶ SQLite DB ◀── LLM Extractor (Ollama)  │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  Your Machine (Windows dev) ──Tailscale──▶ MSI EdgeXpert 13SUS (prod)  │
+│                                            (NVIDIA GB10 128GB Unified) │
+│  CLI ─▶ Orchestrator ─▶ Browser (Playwright)                           │
+│              │            ├──▶ e-Devlet Login (with 2FA Relay)         │
+│              │            └──▶ e-Nabız Direct (with/without 2FA)       │
+│              │                       │           │                     │
+│              │                       ▼           ▼                     │
+│              │       e-Nabız Nav (Qwen2.5-VL) 2FA ─▶ Telegram          │
+│              │              │                                          │
+│              ▼              ▼                                          │
+│         Docling (PDF) ─▶ SQLite DB ◀── Clinical RAG (DeepSeek-R1 70B)  │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
 - **Fully async** Python 3.11+ implementation
-- **Local vision models** (qwen2.5-vl:14b via Ollama) for UI understanding
-- **Hybrid browser automation** — deterministic Playwright for login, LLM-driven for portal navigation
-- **2FA relay** via Telegram Bot (or console fallback) — no open ports needed
-- **Encrypted credentials** (Fernet + PBKDF2) — password never exposed to LLM
+- **Dual-Method Authentication & Auto-Fallback** — Log in using e-Devlet or direct e-Nabız credentials; store both for automated fallback
+- **Flexible 2FA Support** — Telegram OTP relay or console fallback; supports 2FA-enabled and 2FA-exempt accounts
+- **Multi-Profile Isolation** — Separate encrypted credentials, health records, and storage sandboxes for each family member
+- **Specialized Local Medical Models** — Google MedGemma (27B) & DeepSeek-R1 (70B/32B) for clinical EHR evaluation, and Qwen2.5-VL (14B) for visual web navigation and OCR
+- **Hybrid browser automation** — Deterministic Playwright for login, LLM-driven for portal navigation
+- **Encrypted credentials** (Fernet + PBKDF2) — Passwords never exposed to LLM or stored in plain text
 - **PDF parsing** using IBM Docling with TableFormer for medical lab tables
 - **SQLite storage** with dedup, full-text search, and CSV export
-- **Cross-platform** — develop on Windows, deploy on DGX Spark (ARM64 Ubuntu)
+- **Cross-platform** — Develop on Windows, deploy on MSI EdgeXpert 13SUS (NVIDIA GB10 128GB ARM64 Ubuntu)
+
 
 ## Quick Start
 
@@ -54,14 +59,20 @@ playwright install chromium
 
 ### 2. Setup Ollama
 
-Install [Ollama](https://ollama.com/) and pull the vision model:
+Install [Ollama](https://ollama.com/) and pull the specialized models:
 
 ```bash
+# 1. Vision navigation & OCR model (permanent slot 1)
 ollama pull qwen2.5-vl:14b
+
+# 2. Clinical diagnostic reasoning & EHR models (permanent slot 2)
+# Option A: DeepSeek-R1 70B (Deep chain-of-thought clinical reasoning)
+ollama pull deepseek-r1:70b
+# Option B: Google MedGemma 27B (Google Health AI domain-native EHR synthesis)
+ollama pull medgemma:27b
 ```
 
-> **DGX Spark via Tailscale:** If Ollama runs on your DGX Spark, set
-> `OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434` in your `.env`.
+> **MSI EdgeXpert 13SUS via Tailscale:** With 128 GB unified memory on the NVIDIA GB10 Grace Blackwell Superchip, multiple specialized models run permanently resident without swapping (`OLLAMA_MAX_LOADED_MODELS=2`). Set `OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434` in your `.env`.
 
 ### 3. Setup Telegram Bot (Recommended)
 
@@ -89,11 +100,34 @@ This wizard will:
 
 ## Usage
 
+### Multi-Profile Management & Dual Login
+
+The system supports multiple isolated family member profiles. Each profile can authenticate via **e-Devlet**, direct **e-Nabız password**, or **both** (with automatic fallback):
+
+```bash
+# Interactive wizard to add a new profile
+enabiz-ai profile add anne --name "Annem" --relation "Anne"
+
+# The wizard will prompt you to select an authentication method:
+# 1. e-Devlet password + 2FA (default)
+# 2. e-Nabız direct password (with or without 2FA SMS)
+# 3. Both methods (tries e-Devlet first, falls back to e-Nabız)
+
+# List all configured profiles and their login methods
+enabiz-ai profile list
+
+# Authenticate and cache session for a profile
+enabiz-ai profile login anne
+```
+
+### Data Synchronization & Queries
+
 ```bash
 # Sync health data from e-Nabız
 enabiz-ai sync labs          # Download & parse lab results
 enabiz-ai sync rx            # Download prescriptions
 enabiz-ai sync all           # Full sync
+enabiz-ai weekly --profile all # Run weekly sync & AI report for all profiles
 
 # Parse local PDF files
 enabiz-ai parse report.pdf   # Parse a lab result PDF
@@ -103,20 +137,26 @@ enabiz-ai query labs                    # List all lab reports
 enabiz-ai query labs --since 2024-01-01 # Filter by date
 enabiz-ai query labs -s "hemoglobin"    # Search
 
+# Natural Language Health Q&A (Clinical AI)
+enabiz-ai ask "Son açlık kan şekerim ve geçmiş yıllara göre değişimi nedir?" --profile default
+enabiz-ai ask "Hangi tansiyon ilaçlarını kullanıyorum?" --profile anne --model medgemma:27b
+
 # Export data
 enabiz-ai export csv --table lab_tests -o results.csv
 
-# System status
+# System status & version
 enabiz-ai status
+enabiz-ai version
 ```
 
-## DGX Spark Deployment via Tailscale
 
-For production use on your MSI DGX Spark:
+## MSI EdgeXpert 13SUS Deployment via Tailscale
+
+For production execution on your MSI EdgeXpert 13SUS (NVIDIA GB10 128GB Unified Memory):
 
 1. **Install Tailscale** on both machines:
    ```bash
-   # On DGX Spark (Ubuntu ARM64)
+   # On MSI EdgeXpert (Ubuntu 24.04 LTS ARM64)
    curl -fsSL https://tailscale.com/install.sh | sh
    tailscale up
 
@@ -124,15 +164,15 @@ For production use on your MSI DGX Spark:
    # Install from https://tailscale.com/download/windows
    ```
 
-2. **Point Ollama to DGX Spark** (in `.env`):
+2. **Point Ollama to MSI EdgeXpert** (in `.env` on dev machine):
    ```env
-   OLLAMA_BASE_URL=http://<dgx-spark-tailscale-ip>:11434
+   OLLAMA_BASE_URL=http://<edgexpert-tailscale-ip>:11434
    ```
 
-3. **Or run everything on DGX Spark**:
+3. **Or run the entire pipeline directly on MSI EdgeXpert**:
    ```bash
-   # SSH into DGX Spark via Tailscale
-   ssh user@<dgx-spark-tailscale-ip>
+   # SSH into MSI EdgeXpert via Tailscale
+   ssh user@<edgexpert-tailscale-ip>
 
    # Clone repo, install, and run
    git clone <repo> && cd enabiz-ai
@@ -161,6 +201,7 @@ The test suite covers:
 - **Turkish Date Parsing & Lab Abnormality Evaluator** (`test_extraction.py`)
 - **PowerShell Injection Sanitization & HTML Output Escaping** (`test_security.py`)
 - **Clinical RAG Engine & Multi-Profile Batching** (`test_services.py`)
+- **Authenticator Strategy Selection & Fallback** (`test_authenticator.py`)
 - **Typer CLI Runner Operations** (`test_cli.py`)
 
 ## Project Structure
@@ -181,8 +222,9 @@ src/enabiz_ai/
 │   ├── manager.py         # Fernet/PBKDF2 encryption
 │   └── models.py          # Credential Pydantic models
 ├── browser/               # Browser automation
-│   ├── authenticator.py   # Visible Chrome browser interactive login
-│   ├── edevlet_login.py   # Deterministic e-Devlet authentication
+│   ├── authenticator.py   # Strategy selector & interactive authentication
+│   ├── edevlet_login.py   # Deterministic e-Devlet authentication handler
+│   ├── enabiz_login.py    # Direct e-Nabız TC+password authentication handler
 │   └── session_manager.py # Cookie persistence with Fernet encryption at rest
 ├── extraction/            # Document and portal parsing
 │   ├── harvester.py       # Direct portal harvesting with SHA-256 IDs
@@ -196,6 +238,11 @@ src/enabiz_ai/
     ├── database.py        # Async SQLite database (aiosqlite)
     └── file_store.py      # Categorized local health file storage
 ```
+
+## Roadmap & Future Plans
+
+- 🗺️ **[Product Roadmap & Backlog](ROADMAP.md)**: Near-term enhancements and milestone tracking.
+- 🏥 **[Hosted Subscription Service Blueprint (Max 50 Users)](docs/HOSTED_SUBSCRIPTION_PLAN.md)**: Architectural blueprint and technical backlog for a managed, no-code Telegram concierge service for users who don't want to run local code.
 
 ## License
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from telegram import Update
@@ -139,21 +140,45 @@ class TelegramRelay:
         finally:
             self._pending_request = None
 
-    async def send_notification(self, message: str) -> None:
+    async def send_notification(self, message: str, parse_mode: str | None = None) -> None:
         """Send a one-way notification to the user.
 
         Args:
             message: The notification text.
+            parse_mode: Optional parse mode ('HTML', 'Markdown', or None).
+                Auto-detects HTML tags if None.
         """
         if not self._started or self._app is None:
             logger.warning("Cannot send notification — relay not started")
             return
 
-        await self._app.bot.send_message(
-            chat_id=self.authorized_chat_id,
-            text=message,
-            parse_mode="Markdown",
-        )
+        if parse_mode is None:
+            # Auto-detect HTML tags like <b>, <i>, <code>, <a>
+            if re.search(r"<(b|i|code|a|strong|em|pre)[^>]*>", message, re.IGNORECASE):
+                parse_mode = "HTML"
+            else:
+                parse_mode = "Markdown"
+
+        try:
+            await self._app.bot.send_message(
+                chat_id=self.authorized_chat_id,
+                text=message,
+                parse_mode=parse_mode,
+            )
+        except Exception as e:
+            # Fallback to plain text if formatting fails
+            logger.warning(
+                "Failed to send formatted message (%s), retrying as plain text: %s",
+                parse_mode,
+                e,
+            )
+            try:
+                await self._app.bot.send_message(
+                    chat_id=self.authorized_chat_id,
+                    text=message,
+                )
+            except Exception as inner_e:
+                logger.error("Failed to send plain text message: %s", inner_e)
 
     async def send_photo(self, photo_path: str, caption: str = "") -> None:
         """Send a photo (screenshot, report preview) to the user.

@@ -12,9 +12,25 @@ class AppConfig(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Telegram Bot Token")
     telegram_chat_id: str = Field(default="", description="Telegram Chat ID")
 
-    # Ollama
+    # Ollama / Local AI on MSI EdgeXpert 13SUS (NVIDIA GB10 128GB)
     ollama_base_url: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="qwen2.5-vl:14b")
+    ollama_model: str = Field(default="deepseek-r1:70b", description="Default/primary model")
+    model_clinical: str = Field(
+        default="deepseek-r1:70b",
+        description="Clinical reasoning engine: 'deepseek-r1:70b' (deep diagnostic reasoning) or 'medgemma:27b' (Google domain-native clinical EHR synthesis)",
+    )
+    model_vision: str = Field(
+        default="qwen2.5-vl:14b",
+        description="Visual web navigation and medical document OCR model",
+    )
+    model_radiology: str = Field(
+        default="medgemma:27b",
+        description="Multimodal medical imaging and radiology report interpretation model (Google MedGemma 27B / MedSigLIP)",
+    )
+    model_extraction: str = Field(
+        default="qwen2.5:7b",
+        description="Fast structured JSON extractor for plain text lab tables",
+    )
 
     # Data
     enabiz_data_dir: str = Field(default="~/.enabiz-ai")

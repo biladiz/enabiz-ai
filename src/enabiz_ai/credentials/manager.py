@@ -49,17 +49,30 @@ class CredentialManager:
         )
         return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
 
-    def save(self, tc_no: str, password: str, master_passphrase: str) -> None:
-        """
-        Encrypt and save the credentials.
+    def save(
+        self,
+        tc_no: str,
+        master_passphrase: str,
+        password: str | None = None,
+        enabiz_password: str | None = None,
+        twofa_enabled: bool = True,
+    ) -> None:
+        """Encrypt and save the credentials.
 
         Args:
-            tc_no (str): 11-digit Turkish Identity Number.
-            password (str): e-Nabiz password.
-            master_passphrase (str): Passphrase used to encrypt the credentials.
+            tc_no: 11-digit Turkish Identity Number.
+            master_passphrase: Passphrase used to encrypt the credentials.
+            password: e-Devlet password (optional if enabiz_password is set).
+            enabiz_password: ENabız direct login password (optional).
+            twofa_enabled: Whether 2FA/SMS verification is enabled.
         """
         # Validate using the model
-        creds = Credentials(tc_no=tc_no, password=SecretStr(password))
+        creds = Credentials(
+            tc_no=tc_no,
+            password=SecretStr(password) if password else None,
+            enabiz_password=SecretStr(enabiz_password) if enabiz_password else None,
+            twofa_enabled=twofa_enabled,
+        )
         
         salt = os.urandom(16)
         key = self._derive_key(master_passphrase, salt)
@@ -67,7 +80,13 @@ class CredentialManager:
         
         raw_data = json.dumps({
             "tc_no": creds.tc_no,
-            "password": creds.password.get_secret_value()
+            "password": creds.password.get_secret_value() if creds.password else None,
+            "enabiz_password": (
+                creds.enabiz_password.get_secret_value()
+                if creds.enabiz_password
+                else None
+            ),
+            "twofa_enabled": creds.twofa_enabled,
         }).encode("utf-8")
         
         encrypted_data = fernet.encrypt(raw_data)
