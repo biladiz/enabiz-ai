@@ -13,8 +13,19 @@ from pathlib import Path
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
+from enabiz_ai.browser.base_login import (
+    BaseLoginHandler,
+    DELAY_AFTER_PAGE_LOAD,
+    DELAY_BEFORE_SUBMIT,
+    DELAY_BETWEEN_ACTIONS,
+)
 from enabiz_ai.browser.session_manager import SessionManager
 from enabiz_ai.credentials.models import Credentials
+from enabiz_ai.exceptions import (
+    EnabizCaptchaRequired,
+    EnabizLoginError,
+    EnabizOTPTimeout,
+)
 from enabiz_ai.twofa.base import TwoFARelay
 
 logger = logging.getLogger(__name__)
@@ -22,11 +33,6 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────
 ENABIZ_LOGIN_URL = "https://enabiz.gov.tr/Account/Login"
 ENABIZ_DASHBOARD_URL = "enabiz.gov.tr"
-
-# Politeness delays (seconds) to avoid triggering anti-bot
-DELAY_BETWEEN_ACTIONS = 1.5
-DELAY_AFTER_PAGE_LOAD = 2.0
-DELAY_BEFORE_SUBMIT = 1.0
 
 # Known ENabız login page selectors
 ENABIZ_SELECTORS = {
@@ -48,52 +54,24 @@ ENABIZ_SELECTORS = {
     "frozen_account": ".dondurulmusHesapUyari",
     # CAPTCHA indicators
     "captcha": '.captcha, #captchaImage, [class*="captcha"], [id*="captcha"]',
+    # Cloudflare Turnstile bot challenge
+    "turnstile_widget": "#bot-challenge-widget, .cf-turnstile, [data-sitekey]",
+    "turnstile_iframe": 'iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], #bot-challenge-widget iframe',
 }
 
 
-class EnabizLoginError(Exception):
-    """Raised when ENabız direct login fails."""
-    pass
-
-
-class EnabizCaptchaRequired(EnabizLoginError):
-    """Raised when CAPTCHA challenge is detected on ENabız login."""
-    pass
-
-
-class EnabizOTPTimeout(EnabizLoginError):
-    """Raised when OTP entry times out during ENabız 2FA."""
-    pass
-
-
-class EnabizLogin:
+class EnabizLogin(BaseLoginHandler):
     """Handles the ENabız direct TC+password login flow.
 
     Uses deterministic Playwright selectors for the known login page at
-    enabiz.gov.tr.  Integrates with a TwoFARelay for SMS OTP verification
-    when 2FA is enabled for the account.
+    enabiz.gov.tr. Handles Cloudflare Turnstile bot verification challenges
+    and integrates with a TwoFARelay for SMS OTP verification when 2FA is
+    enabled for the account.
 
     Usage:
         login = EnabizLogin(session_manager, twofa_relay, credentials)
         success = await login.login(page)
     """
-
-    def __init__(
-        self,
-        session_manager: SessionManager,
-        twofa_relay: TwoFARelay,
-        credentials: Credentials,
-    ) -> None:
-        """Initialize the ENabız login handler.
-
-        Args:
-            session_manager: For saving/loading session cookies.
-            twofa_relay: 2FA relay for OTP exchange (Telegram or Console).
-            credentials: Encrypted credentials (must have enabiz_password set).
-        """
-        self.session_manager = session_manager
-        self.twofa = twofa_relay
-        self.credentials = credentials
 
     async def login(self, page: Page) -> bool:
         """Execute the full ENabız direct login flow.
@@ -102,10 +80,11 @@ class EnabizLogin:
             1. Check if existing session is still valid
             2. Navigate to ENabız login page
             3. Fill TC Kimlik No and ENabız password
-            4. Submit the form
-            5. Handle 2FA/SMS verification if enabled
-            6. Verify redirect to e-Nabız dashboard
-            7. Save session cookies
+            4. Resolve Cloudflare Turnstile bot challenge if present
+            5. Submit the form
+            6. Handle 2FA/SMS verification if prompted
+            7. Verify redirect to e-Nabız dashboard
+            8. Save session cookies
 
         Args:
             page: A Playwright Page instance.
@@ -131,24 +110,26 @@ class EnabizLogin:
             # Step 2: Navigate to login page
             await self._navigate_to_login(page)
 
-            # Step 3: Check for CAPTCHA before proceeding
+            # Step 3: Check for traditional CAPTCHA before proceeding
             if await self._detect_captcha(page):
                 await self._handle_captcha(page)
 
             # Step 4: Fill credentials
             await self._fill_credentials(page)
 
-            # Step 5: Submit the form
+            # Step 5: Resolve Cloudflare Turnstile before submission
+            await self._resolve_turnstile(page)
+
+            # Step 6: Submit the form
             await self._submit_login(page)
 
-            # Step 6: Handle 2FA if enabled
-            if self.credentials.twofa_enabled:
-                await self._handle_2fa(page)
+            # Step 7: Handle 2FA if prompted
+            await self._handle_2fa(page)
 
-            # Step 7: Verify we reached e-Nabız dashboard
+            # Step 8: Verify we reached e-Nabız dashboard
             await self._verify_dashboard(page)
 
-            # Step 8: Save session
+            # Step 9: Save session
             context = page.context
             await self.session_manager.save_storage_state(context)
 
@@ -203,6 +184,89 @@ class EnabizLogin:
         await pw_input.fill(self.credentials.enabiz_password.get_secret_value())
         await asyncio.sleep(DELAY_BEFORE_SUBMIT)
 
+    async def _detect_turnstile(self, page: Page) -> bool:
+        """Check if Cloudflare Turnstile bot challenge is active on the page."""
+        try:
+            return await page.evaluate(
+                "() => (typeof isBotChallengeEnabled !== 'undefined' && isBotChallengeEnabled) || "
+                "!!document.getElementById('bot-challenge-widget') || "
+                "!!document.querySelector('.cf-turnstile') || "
+                "!!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+            )
+        except Exception:
+            return False
+
+    async def _get_challenge_token(self, page: Page) -> str | None:
+        """Retrieve the current Turnstile challenge token if resolved."""
+        try:
+            token = await page.evaluate(
+                "() => (typeof getChallengeToken === 'function' ? getChallengeToken() : "
+                "(document.querySelector('[name=\"cf-turnstile-response\"]') ? "
+                "document.querySelector('[name=\"cf-turnstile-response\"]').value : null))"
+            )
+            if token and isinstance(token, str) and token.strip():
+                return token.strip()
+            return None
+        except Exception:
+            return None
+
+    async def _resolve_turnstile(self, page: Page) -> None:
+        """Handle Cloudflare Turnstile verification before form submission."""
+        if not await self._detect_turnstile(page):
+            return
+
+        # Check if already resolved
+        token = await self._get_challenge_token(page)
+        if token:
+            logger.info("Cloudflare Turnstile token already available")
+            return
+
+        logger.info("Cloudflare Turnstile challenge detected — attempting verification")
+
+        # 1. Attempt auto-clicking the Turnstile widget
+        widget = await page.query_selector(ENABIZ_SELECTORS["turnstile_widget"])
+        if widget:
+            box = await widget.bounding_box()
+            if box:
+                try:
+                    await page.mouse.click(box["x"] + 30, box["y"] + (box["height"] / 2))
+                except Exception as e:
+                    logger.debug("Failed to auto-click turnstile widget: %s", e)
+
+        # Wait briefly to check if auto-click resolved the challenge
+        await asyncio.sleep(2.0)
+        token = await self._get_challenge_token(page)
+        if token:
+            logger.info("Cloudflare Turnstile verified automatically")
+            return
+
+        # 2. Inform user via notification & console
+        prompt_msg = (
+            "🧩 Cloudflare robot doğrulaması gerekiyor. "
+            "Lütfen ekrandaki 'Verify you are human' (Robot olmadığınızı doğrulayın) kutucuğuna tıklayın."
+        )
+        logger.warning(prompt_msg)
+        await self.twofa.send_notification(
+            "🧩 <b>Güvenlik Doğrulaması (Cloudflare Turnstile):</b>\n"
+            "Lütfen açılan tarayıcı penceresinde <b>'Verify you are human'</b> kutucuğuna tıklayarak doğrulamayı tamamlayın."
+        )
+
+        # 3. Wait for user or Turnstile completion (up to 90 seconds)
+        for second in range(90):
+            token = await self._get_challenge_token(page)
+            if token:
+                logger.info("Cloudflare Turnstile challenge resolved after %d seconds", second + 1)
+                await self.twofa.send_notification("✅ Güvenlik doğrulaması tamamlandı, giriş yapılıyor...")
+                return
+            await asyncio.sleep(1.0)
+
+        # Timed out
+        await self._save_debug_screenshot(page, "enabiz_turnstile_timeout")
+        raise EnabizLoginError(
+            "Cloudflare Turnstile doğrulaması zaman aşımına uğradı. "
+            "Lütfen açılan tarayıcı penceresindeki 'Verify you are human' kutucuğunu işaretleyin."
+        )
+
     async def _submit_login(self, page: Page) -> None:
         """Submit the ENabız login form and wait for response."""
         logger.info("Submitting ENabız login form")
@@ -211,36 +275,39 @@ class EnabizLogin:
         )
         await submit_btn.click()
 
-        # Wait for navigation or AJAX response
-        await asyncio.sleep(DELAY_AFTER_PAGE_LOAD)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
-        except PlaywrightTimeout:
-            logger.debug("Network didn't fully settle — continuing anyway")
+        # Poll immediately for toastr notifications, errors, 2FA prompt, or redirect
+        for _ in range(30):
+            await asyncio.sleep(0.3)
 
-        # Check for frozen account
-        frozen_el = await page.query_selector(ENABIZ_SELECTORS["frozen_account"])
-        if frozen_el:
-            frozen_visible = await frozen_el.is_visible()
-            if frozen_visible:
+            # Check if redirected to dashboard
+            if ENABIZ_DASHBOARD_URL in page.url and "Account/Login" not in page.url:
+                logger.info("Redirected away from login page immediately")
+                return
+
+            # Check if 2FA container is visible
+            twofa_el = await page.query_selector(ENABIZ_SELECTORS["twofa_container"])
+            if twofa_el and await twofa_el.is_visible():
+                logger.info("2FA container (#ikiAsamaliOnay) is now visible")
+                return
+
+            # Check for frozen account
+            frozen_el = await page.query_selector(ENABIZ_SELECTORS["frozen_account"])
+            if frozen_el and await frozen_el.is_visible():
                 logger.error("Account is frozen (dondurulmuş)")
                 await self.twofa.send_notification(
-                    "❌ Hesap dondurulmuş! Lütfen e-Nabız üzerinden hesabınızı açın."
+                    "❌ Hesap dondurulmuş! Lütfen e-Devlet üzerinden hesabınızı aktif hâle getirin."
                 )
-                raise EnabizLoginError("Account is frozen (dondurulmuş hesap).")
+                raise EnabizLoginError("Account is frozen (dondurulmuş hesap). Lütfen e-Devlet ile giriş yapınız.")
 
-        # Check for error toast notifications
-        error_el = await page.query_selector(ENABIZ_SELECTORS["error_toast"])
-        if error_el:
-            error_visible = await error_el.is_visible()
-            if error_visible:
+            # Check for error toast notifications
+            error_el = await page.query_selector(ENABIZ_SELECTORS["error_toast"])
+            if error_el and await error_el.is_visible():
                 error_text = await error_el.text_content()
                 if error_text and error_text.strip():
-                    logger.error("ENabız login error: %s", error_text.strip())
-                    await self.twofa.send_notification(
-                        f"❌ Giriş hatası: {error_text.strip()}"
-                    )
-                    raise EnabizLoginError(f"ENabız login error: {error_text.strip()}")
+                    msg = error_text.strip()
+                    logger.error("ENabız login error toast: %s", msg)
+                    await self.twofa.send_notification(f"❌ Giriş hatası: {msg}")
+                    raise EnabizLoginError(f"e-Nabız giriş hatası: {msg}")
 
     async def _handle_2fa(self, page: Page) -> None:
         """Handle SMS OTP verification for ENabız 2FA.
@@ -253,34 +320,26 @@ class EnabizLogin:
             logger.info("No 2FA required — already on dashboard")
             return
 
-        # Wait for the 2FA container to appear
+        # Check if 2FA container is visible or wait briefly for it
         twofa_container = await page.query_selector(ENABIZ_SELECTORS["twofa_container"])
-        if not twofa_container:
-            await asyncio.sleep(2.0)
+        for _ in range(6):
+            if twofa_container and await twofa_container.is_visible():
+                break
+            await asyncio.sleep(0.5)
             twofa_container = await page.query_selector(ENABIZ_SELECTORS["twofa_container"])
 
-        if not twofa_container:
-            # 2FA might not be required, or we may already be on the dashboard
+        if not twofa_container or not await twofa_container.is_visible():
             if ENABIZ_DASHBOARD_URL in page.url and "Account/Login" not in page.url:
                 return
-            logger.info(
-                "No 2FA container found — checking if login was successful (URL: %s)",
-                page.url,
-            )
+            logger.info("No visible 2FA container found")
             return
 
-        # Check if the container is actually visible
-        is_visible = await twofa_container.is_visible()
-        if not is_visible:
-            logger.info("2FA container exists but is not visible — no 2FA required")
-            return
-
-        logger.info("2FA page detected — requesting OTP from user")
+        logger.info("2FA page detected (#ikiAsamaliOnay) — requesting OTP from user")
 
         # Request OTP via the relay (Telegram or Console)
         otp_code = await self.twofa.request_otp(
             "📱 e-Nabız SMS doğrulama kodu telefonunuza gönderildi.\n"
-            "Lütfen 6 haneli kodu girin:"
+            "Lütfen SMS ile gelen 6 haneli kodu girin:"
         )
 
         # Find and fill the OTP input
@@ -299,11 +358,16 @@ class EnabizLogin:
         else:
             await otp_input.press("Enter")
 
-        await asyncio.sleep(DELAY_AFTER_PAGE_LOAD)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
-        except PlaywrightTimeout:
-            logger.debug("Network didn't fully settle after 2FA — continuing")
+        # Wait for redirect or check for SMS errors
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            if ENABIZ_DASHBOARD_URL in page.url and "Account/Login" not in page.url:
+                return
+            error_el = await page.query_selector(ENABIZ_SELECTORS["error_toast"])
+            if error_el and await error_el.is_visible():
+                txt = await error_el.text_content()
+                if txt and txt.strip():
+                    raise EnabizLoginError(f"2FA SMS doğrulama hatası: {txt.strip()}")
 
     async def _verify_dashboard(self, page: Page) -> None:
         """Verify that we've successfully reached the e-Nabız dashboard."""
@@ -325,6 +389,22 @@ class EnabizLogin:
         if ENABIZ_DASHBOARD_URL in current_url and "Account/Login" not in current_url:
             logger.info("On e-Nabız dashboard: %s", current_url)
             return
+
+        # Check if an error message or incomplete turnstile is present
+        error_el = await page.query_selector(
+            ENABIZ_SELECTORS["error_toast"] + ", .alert-danger, .validation-summary-errors"
+        )
+        if error_el and await error_el.is_visible():
+            err_txt = await error_el.text_content()
+            if err_txt and err_txt.strip():
+                raise EnabizLoginError(f"e-Nabız giriş hatası: {err_txt.strip()}")
+
+        if await self._detect_turnstile(page) and not await self._get_challenge_token(page):
+            await self._save_debug_screenshot(page, "enabiz_turnstile_incomplete")
+            raise EnabizLoginError(
+                "e-Nabız giriş ekranında Cloudflare güvenlik doğrulaması (Turnstile) tamamlanamadı. "
+                "Lütfen tarayıcıdaki 'Verify you are human' kutucuğunu işaretleyin veya e-Devlet ile giriş yapın."
+            )
 
         logger.error(
             "Failed to reach e-Nabız dashboard. Current URL: %s", current_url
@@ -376,50 +456,4 @@ class EnabizLogin:
         Raises:
             EnabizLoginError: If element is not found.
         """
-        # Try the compound selector first
-        element = await page.query_selector(selector)
-        if element:
-            return element
-
-        # Try each alternative individually
-        for sel in selector.split(","):
-            sel = sel.strip()
-            element = await page.query_selector(sel)
-            if element:
-                return element
-
-        # Last resort: wait for any of them
-        try:
-            await page.wait_for_selector(selector, timeout=10000)
-            element = await page.query_selector(selector)
-            if element:
-                return element
-        except PlaywrightTimeout:
-            pass
-
-        raise EnabizLoginError(
-            f"Could not find {name} on page (selector: {selector})"
-        )
-
-    async def _save_debug_screenshot(self, page: Page, name: str) -> Path | None:
-        """Save a debug screenshot to the screenshots directory.
-
-        Args:
-            page: Playwright Page.
-            name: Name prefix for the screenshot file.
-
-        Returns:
-            Path to the saved screenshot, or None if failed.
-        """
-        try:
-            screenshots_dir = self.session_manager.get_screenshots_dir()
-            import time
-
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            screenshot_path = screenshots_dir / f"{name}_{timestamp}.png"
-            await page.screenshot(path=str(screenshot_path), full_page=True)
-            logger.debug("Debug screenshot saved: %s", screenshot_path)
-            return screenshot_path
-        except Exception as e:
-            logger.warning("Failed to save screenshot: %s", e)
-            return None
+        return await self._wait_for_any_selector(page, selector, name=name)
